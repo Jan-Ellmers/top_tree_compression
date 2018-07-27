@@ -1,0 +1,6 @@
+[package]
+name = "Top_Tree_Compression"
+version = "0.1.0"
+authors = ["uzdlm <jan.ellmers@yahoo.de>"]
+
+[dependencies]
