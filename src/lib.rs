@@ -1,21 +1,23 @@
-#![allow(non_snake_case)]
-#![allow(dead_code)]
 extern crate xml;
 
 mod structs;
 
 use xml::reader::{EventReader, XmlEvent};
 
-use structs::{Node, Leaf, Edge, ClusterID, InputNode, ParseError};
+use structs::{Node, Leaf, Edge, ClusterID, ParseError, Child, NodeHandle, MergeType, Data};
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::error::Error;
 use std::io::Read;
+use std::fmt::{Debug, Formatter, Result, Write};
+use std::time::Instant;
 
 
 type GenError = Box<Error>;
-type GenResult<T> = Result<T, GenError>;
+type GenResult<T> = std::result::Result<T, GenError>;
+
+const DUMMY_NODE_LABEL: &str = "Dummy_node";
 
 pub struct TopTreeBuilder {
     label_counter: usize,
@@ -25,48 +27,487 @@ pub struct TopTreeBuilder {
     edges: Vec<Edge>,
     cluster_counter: usize,
     clusters: HashMap<ClusterID, usize>,
+
+    //for Debug
+    cluster_vector: Vec<(ClusterID, usize)>,
+    label_vector: Vec<(String, usize)>,
 }
 
 impl TopTreeBuilder {
-    fn new_from_xml(path: &str) -> GenResult<TopTreeBuilder> {
-        let mut builder = TopTreeBuilder {
-            label_counter: 0,
-            labels: HashMap::new(),
-            nodes: Vec::new(),
-            leafs: Vec::new(),
-            edges: Vec::new(),
-            cluster_counter: 0,
-            clusters: HashMap::new(),
-        };
-
+    pub fn new_from_xml(path: &str) -> GenResult<TopTreeBuilder> {
         let file = File::open(path)?;
         let mut reader = EventReader::new(file);
 
-        let root = parse_xml(&mut reader, None, &mut builder)?;
+        let root;
+        if cfg!(feature = "performance_test") {
+            let time_stamp = Instant::now();
+            root = parse_xml(&mut reader, None)?;
+            println!("Converting the XML to the IO tree toke: {:?}", time_stamp.elapsed());
+        } else {
+            root = parse_xml(&mut reader, None)?;
+        }
 
+        Ok(TopTreeBuilder::new_from_IO_tree(root))
+    }
 
-        panic!("");
+    #[allow(non_snake_case)]
+    pub fn new_from_IO_tree(tree: IO_Tree) -> TopTreeBuilder {
+        let mut builder = TopTreeBuilder {
+            label_counter: 0,
+            labels: HashMap::new(),
+            nodes: Vec::with_capacity(4_000_000),
+            leafs: Vec::with_capacity(4_000_000),
+            edges: Vec::with_capacity(4_000_000),
+            cluster_counter: 0,
+            clusters: HashMap::new(),
+
+            cluster_vector: Vec::new(),
+            label_vector: Vec::new(),
+        };
+
+        //insert the dummy label
+        let dummy_label_id = builder.insert_label(&DUMMY_NODE_LABEL.to_owned());
+        builder.nodes.push(Node::new(dummy_label_id));
+
+        //insert a place holder child
+        builder.edges.push(Edge::default());
+
+        //insert the root
+        let root_label_id = builder.insert_label(&tree.label);
+        let child = if tree.children.len() == 0 {
+            Child::Leaf(Leaf {deleted: false, data: Data::Label(root_label_id)})
+        } else {
+            Child::Node(Node::new(root_label_id), Some(tree.children.len()))
+        };
+        let root_addr = builder.push_child(0, child);
+
+        //insert the tree
+        if cfg!(feature = "performance_test") {
+            let time_stamp = Instant::now();
+                builder.rec_insert_tree(root_addr, tree);
+            println!("Parsing the IO tree toke: {:?}", time_stamp.elapsed());
+        } else {
+            builder.rec_insert_tree(root_addr, tree);
+        }
+
+        //build the TopDag
+        while !builder.finished() {
+            if cfg!(feature = "performance_test") {
+                println!("New Round:");
+                let mut time_stamp = Instant::now();
+
+                builder.step_1();
+
+                let first_timestamp = time_stamp.elapsed();
+                if cfg!(feature = "debug") {
+                    println!("Step 1 finished");
+                    println!("{:?}", builder);
+                }
+                time_stamp = Instant::now();
+
+                builder.step_2();
+
+                let second_timestamp = time_stamp.elapsed();
+                if cfg!(feature = "debug") {
+                    println!("Step 2 finished");
+                    println!("{:?}", builder);
+                }
+                println!("Step 1 toke: {:?}, Step 2 toke: {:?}", first_timestamp, second_timestamp);
+            } else {
+                builder.step_1();
+                if cfg!(feature = "debug") {
+                    println!("Step 1 finished");
+                    println!("{:?}", builder);
+                }
+                builder.step_2();
+                if cfg!(feature = "debug") {
+                    println!("Step 2 finished");
+                    println!("{:?}", builder);
+                }
+            }
+
+        }
+        builder
+    }
+
+    /// computes if we have finished the TopDag building
+    fn finished(&self) -> bool {
+        //if the dummy node has only one child and that child is a leaf
+        //but dummy node always must have one child
+        self.edges[self.nodes[0].first_child].index >= usize::max_value() >> 1
+    }
+
+    fn step_1(&mut self) {
+        let mut index = 0;
+        while index < self.nodes.len() {
+            //check if node is not deleted
+            if !self.nodes[index].deleted {
+                self.step_1_subroutine(index);
+            }
+            index += 1;
+        }
+    }
+
+    fn step_1_subroutine(&mut self, parent: usize) {
+        //assert all nodes between first and last child are not deleted
+        let mut index = self.nodes[parent].first_child;
+        while index + 1 < self.nodes[parent].last_child {
+            let first_is_leaf = self.edges[index].index >= usize::max_value() >> 1;
+            let second_is_leaf = self.edges[index + 1].index >= usize::max_value() >> 1;
+
+            let first_cluster = NodeHandle { parent, child: index };
+            let second_cluster = NodeHandle { parent, child: index + 1 };
+
+            if first_is_leaf { //merge type D or E
+                self.merge(first_cluster, second_cluster, MergeType::DE);
+            } else if second_is_leaf { //merge type C
+                self.merge(first_cluster, second_cluster, MergeType::C);
+            } //else no merge possible
+
+            index +=2;
+        }
+        //restore the assertion
+        self.compress_children(parent);
+    }
+
+    fn step_2(&mut self) {
+        let mut index = 0;
+        while index < self.nodes.len() {
+            //check if node is not deleted
+            if !self.nodes[index].deleted {
+                if self.nodes[index].first_child + 1 < self.nodes[index].last_child || index == 0 {//node has more than one child or is the dummy node
+                    let mut child_index = self.nodes[index].first_child;
+                    while child_index < self.nodes[index].last_child {
+                        self.step_2_subroutine(NodeHandle { parent: index, child: child_index});
+                        child_index += 1;
+                    }
+                }
+            }
+            index += 1;
+        }
+    }
+
+    fn step_2_subroutine(&mut self, mut first_cluster: NodeHandle) {
+        loop {
+            let second_cluster;
+            {//check if second_cluster is valid
+                let edge = &mut self.edges[first_cluster.child];
+                if edge.index >= usize::max_value() >> 1 { return } //child is a leaf
+                let child = &mut self.nodes[edge.index];
+                if !(child.first_child + 1 == child.last_child) { return } //child has more than one child
+
+                second_cluster = NodeHandle {
+                    parent: edge.index,
+                    child: child.first_child
+                };
+            }
+
+            self.merge(first_cluster.clone(), second_cluster.clone(), MergeType::AB);
+
+            if self.edges[first_cluster.child].index >= usize::max_value() >> 1 { return } //child is a leaf
+            first_cluster.parent = self.edges[first_cluster.child].index;
+            if !self.nodes[first_cluster.parent].first_child + 1 == self.nodes[first_cluster.parent].last_child { return } //child has more than one child
+            first_cluster.child = self.nodes[first_cluster.parent].first_child;
+        }
+    }
+
+    fn merge(&mut self, first_cluster: NodeHandle, second_cluster: NodeHandle, merge_type: MergeType) {
+        use MergeType::{AB,C,DE};
+        //get the id of the new cluster
+        let cluster_id = ClusterID::Cluster {
+            merge_type: merge_type.clone(),
+            first_child: self.get_cluster_id_from_child(first_cluster.child),
+            second_child: self.get_cluster_id_from_child(second_cluster.child),
+        };
+        let cluster_id = self.add_cluster(cluster_id);
+
+        match merge_type {
+            AB => { //means A or B
+                //change the data on the second_cluster_child
+                let cluster_child_index = self.edges[second_cluster.child].index;
+                if cluster_child_index < usize::max_value() >> 1 {
+                    //child is a node so we have a A merge
+                    self.nodes[cluster_child_index].data = Data::Cluster(cluster_id);
+                } else {
+                    //child is a leaf so we have a B merge
+                    self.leafs[cluster_child_index - (usize::max_value() >> 1)].data = Data::Cluster(cluster_id);
+                }
+
+                //connect first parent mit second child
+                self.edges.swap(first_cluster.child, second_cluster.child);
+
+                //delete the unneeded edge and node
+                self.edges[second_cluster.child].deleted = true;
+                self.nodes[second_cluster.parent].deleted = true;
+            },
+
+            C => {
+                //change the data on the first_cluster_child
+                let cluster_child_index = self.edges[first_cluster.child].index;
+                //child is a node because we have a C merge
+                self.nodes[cluster_child_index].data = Data::Cluster(cluster_id);
+
+                //delete the unneeded edge and node
+                self.edges[second_cluster.child].deleted = true;
+                //no check needed we just can delete leafs
+                self.leafs[self.edges[second_cluster.child].index - (usize::max_value() >> 1)].deleted = true;
+            },
+
+            DE => { //means D or E
+                //change the data on the first_cluster_child
+                let cluster_child_index = self.edges[second_cluster.child].index;
+                if cluster_child_index < usize::max_value() >> 1 {
+                    //child is a node so we have a D merge
+                    self.nodes[cluster_child_index].data = Data::Cluster(cluster_id);
+                } else {
+                    //child is a leaf so we have a E merge
+                    self.leafs[cluster_child_index - (usize::max_value() >> 1)].data = Data::Cluster(cluster_id);
+                }
+
+                //delete the unneeded edge and node
+                self.edges[first_cluster.child].deleted = true;
+                //no check needed we just can delete leafs
+                self.leafs[self.edges[first_cluster.child].index - (usize::max_value() >> 1)].deleted = true;
+            },
+        }
+    }
+
+    /// builds a cluster from the child
+    /// child must be an index from the edge array
+    /// returns the usize identifier from the child
+    fn get_cluster_id_from_child(&mut self, child: usize) -> usize {
+        let node_index = self.edges[child].index;
+        let node_data = if node_index < usize::max_value() >> 1 {
+            //child is a node
+            self.nodes[node_index].data.clone()
+        } else {
+            //child is a leaf
+            self.leafs[node_index - (usize::max_value() >> 1)].data.clone()
+        };
+
+        match node_data {
+            Data::Label(id) => { //we have to add the cluster first
+                self.add_cluster(ClusterID::Leaf {label: id})
+            },
+            Data::Cluster(id) => { //we already have a cluster so we just return the id
+                id
+            },
+        }
+    }
+
+    /// adds a cluster to the Cluster HashMap returns the key of the new added cluster
+    fn add_cluster(&mut self, cluster: ClusterID) -> usize {
+        let mut cluster_id = self.cluster_counter;
+        if let Some(old_cluster_id) = self.clusters.insert(cluster.clone(), cluster_id) {
+            self.clusters.insert(cluster.clone(), old_cluster_id);
+            cluster_id = old_cluster_id;
+        } else { //cluster was not inserted jet
+            if cfg!(feature = "debug") {
+                self.cluster_vector.push((cluster, cluster_id));
+            }
+            self.cluster_counter += 1;
+        }
+        cluster_id
+    }
+
+    fn rec_insert_tree(&mut self, node: usize, tree: IO_Tree) {
+        for child in tree.children {
+            //insert label
+            if tree.label == DUMMY_NODE_LABEL { panic!("Error: Node must not be called {}", DUMMY_NODE_LABEL) }
+            let label_id = self.insert_label(&child.label);
+
+            let number_of_children = child.children.len();
+            let new_child = if number_of_children == 0 {
+                Child::Leaf(Leaf{ deleted: false, data: Data::Label(label_id) })
+            } else {
+                Child::Node(Node::new(label_id), Some(number_of_children))
+            };
+
+            let pos = self.push_child(node, new_child);
+            self.rec_insert_tree(pos, child);
+        }
+    }
+
+    fn insert_label(&mut self, name: &String) -> usize {
+        let mut label_id = self.label_counter;
+        if let Some(old_label) = self.labels.insert(name.clone(), label_id) {
+            self.labels.insert(name.clone(), old_label);
+            label_id = old_label;
+        } else { //label was not inserted jet
+            if cfg!(feature = "debug") {
+                self.label_vector.push((name.to_string(), label_id));
+            }
+            self.label_counter += 1;
+        }
+        label_id
+    }
+
+    ///returns the position of the child in the node- or leaf array
+    fn push_child(&mut self, parent: usize, child: Child) -> usize {
+        use structs::Child::{Node, Leaf};
+        if parent < usize::max_value() >> 1 {
+            let last_child = self.nodes[parent].last_child;
+
+            //add the child to the Vector
+            let child_addr;
+            match child {
+                Leaf(leaf) => {
+                    child_addr = self.leafs.len() + (usize::max_value() >> 1);
+                    self.leafs.push(leaf);
+                },
+
+                Node(node, number_of_children) => {
+                    let number_of_children = number_of_children.unwrap_or(1);
+                    //get the new addr from child an push it to that addr
+                    child_addr = self.nodes.len();
+                    if child_addr >= usize::max_value() >> 1 {panic!("Error: To many nodes");}
+                    self.nodes.push(node);
+
+                    //set the child addr
+                    self.nodes[child_addr].first_child = self.edges.len();
+                    self.nodes[child_addr].last_child = self.edges.len();
+
+                    //reserve space for future children
+                    for _ in 0..number_of_children {
+                        self.edges.push(Edge::default());
+                    }
+                },
+            }
+
+            //add the addr to child
+            //if     last child is not greater than the array
+            //   and the edge at that position is deleted so we can overwrite it
+            //   and we do not interfere with the next node first_child pointer
+            if     last_child < self.edges.len() 
+                && self.edges[last_child].deleted 
+                && (( parent + 1 < self.nodes.len() 
+                      && self.nodes[parent + 1].first_child > last_child)
+                      || parent + 1 >= self.nodes.len()) {
+
+                //replace edge
+                self.edges[last_child].deleted = false;
+                self.edges[last_child].index = child_addr;
+
+                //adjust last child addr
+                self.nodes[parent].last_child += 1;
+            } else {
+                //insert child
+                self.edges.insert(last_child, Edge {
+                    deleted: false,
+                    index: child_addr});
+
+                //adjust last child addr
+                self.nodes[parent].last_child += 1;
+
+                //check if we are at the end of the edges array
+                if last_child < self.edges.len() {
+                    println!("Warning: Edge buffer is empty");
+
+                    //adjust all node child addr
+                    let mut index = parent + 1;
+                    while index < self.nodes.len() {
+                        self.nodes[index].first_child += 1;
+                        self.nodes[index].last_child += 1;
+                        index += 1;
+                    }
+                }
+            }
+
+            child_addr
+        } else {
+            panic!("Error: Can not push a Child to a Leaf");
+        }
+    }
+
+    ///swaps the children around to restore the assertion from the Node struct
+    fn compress_children(&mut self, parent: usize) {
+        //find first not deleted edge
+        let mut backward_index = self.nodes[parent].first_child;
+        while !(backward_index >= self.nodes[parent].last_child || self.edges[backward_index].deleted) {
+            backward_index += 1;
+        }
+        let mut forward_index = backward_index + 1;
+
+        //swap nodes
+        while forward_index < self.nodes[parent].last_child {
+            if !self.edges[forward_index].deleted { //node is not deleted
+                self.edges.swap(backward_index, forward_index);
+                backward_index += 1;
+                forward_index += 1;
+            } else { //node is deleted
+                forward_index += 1;
+            }
+        }
+
+        //adjust last child
+        self.nodes[parent].last_child = backward_index;
     }
 }
 
-fn parse_xml<B: Read>(mut reader: &mut EventReader<B>, mut node: Option<InputNode>, builder: &mut TopTreeBuilder) -> GenResult<InputNode> {
+impl Debug for TopTreeBuilder {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        let mut output = String::new();
+        write!(output, "Label HashMap: \n")?;
+        let mut labels = vec![];
+        for label in self.labels.clone() {
+            labels.push(label);
+        }
+        labels.sort_by_key(|value| {value.1});
+        for label in labels {
+            write!(output, "{:?} \n", label)?;
+        }
+
+        write!(output, "\nNodes Vector: \n")?;
+        for node in self.nodes.clone() {
+            write!(output, "{:?} \n", node)?;
+        }
+
+        write!(output, "\nLeaf Vector: \n")?;
+        for leaf in self.leafs.clone() {
+            write!(output, "{:?} \n", leaf)?;
+        }
+
+        write!(output, "\nEdge Vector: \n")?;
+        for mut edge in self.edges.clone() {
+            if edge.index < usize::max_value() >> 1 { //node
+                write!(output, "Node: ")?;
+            } else { //leaf
+                write!(output, "Leaf: ")?;
+            }
+            edge.index %= usize::max_value() >> 1;
+            write!(output, "{:?} \n", edge)?;
+        }
+
+        write!(output, "\nCluster HashMap: \n")?;
+        let mut clusters = vec![];
+        for cluster in self.clusters.clone() {
+            clusters.push(cluster);
+        }
+        clusters.sort_by_key(|value| {value.1});
+        for cluster in clusters {
+            write!(output, "{:?} \n", cluster)?;
+        }
+
+        write!(f, "Debug info: \n{}", output)
+    }
+}
+
+#[derive(Clone, Debug)]
+#[allow(non_camel_case_types)]
+pub struct IO_Tree {
+    pub label: String,
+    pub children: Vec<IO_Tree>,
+}
+
+fn parse_xml<B: Read> (mut reader: &mut EventReader<B>, mut node: Option<IO_Tree>) -> GenResult<IO_Tree> {
     'filereader: loop {
         match reader.next()? {
             XmlEvent::EndElement {
                 name
             } => {
                 if let Some(elem) = node {
-                    //insert the label
-                    let mut label_id = builder.label_counter;
-                    if let Some(old_label) = builder.labels.insert(name.to_string(), label_id) {
-                        builder.labels.insert(name.to_string(), old_label);
-                        label_id = old_label;
-                    } else {
-                        builder.label_counter += 1;
-                    }
-
                     //check if label is the same
-                    if label_id == elem.label {
+                    if name.to_string() == elem.label {
                         return Ok(elem);
                     } else {
                         return Err(Box::new(ParseError::CannotParse));
@@ -79,29 +520,20 @@ fn parse_xml<B: Read>(mut reader: &mut EventReader<B>, mut node: Option<InputNod
                 attributes: _,
                 namespace: _,
             } => {
-                //insert the label
-                let mut label_id = builder.label_counter;
-                if let Some(old_label) = builder.labels.insert(name.to_string(), label_id) {
-                    builder.labels.insert(name.to_string(), old_label);
-                    label_id = old_label;
-                } else {
-                    builder.label_counter += 1;
-                }
-
                 //build new node
                 if let Some(ref mut elem) = node {
-                    let new_elem = InputNode {
-                        label: label_id,
+                    let new_elem = IO_Tree {
+                        label: name.to_string(),
                         children: Vec::new(),
                     };
 
-                    elem.children.push(parse_xml(&mut reader, Some(new_elem), builder)?);
+                    elem.children.push(parse_xml(&mut reader, Some(new_elem))?);
                 } else {
-                    let root = InputNode {
-                        label: label_id,
+                    let root = IO_Tree {
+                        label: name.to_string(),
                         children: Vec::new(),
                     };
-                    return parse_xml(&mut reader, Some(root), builder);
+                    return parse_xml(&mut reader, Some(root));
                 }
             },
 
@@ -119,4 +551,3 @@ fn parse_xml<B: Read>(mut reader: &mut EventReader<B>, mut node: Option<InputNod
         }
     }
 }
-

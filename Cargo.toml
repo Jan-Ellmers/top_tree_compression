@@ -1,7 +1,12 @@
 [package]
-name = "Top_Tree_Compression"
+name = "top_tree_compression"
 version = "0.1.0"
 authors = ["uzdlm <jan.ellmers@yahoo.de>"]
 
 [dependencies]
 xml-rs = "0.7"
+
+[features]
+default = []
+debug = []
+performance_test = []

@@ -1,31 +1,29 @@
-use std::ops::{Deref, DerefMut};
+//use std::ops::{Deref, DerefMut};
 use std::error::Error;
 use std::fmt::{Result, Formatter, Display};
 
-pub struct InputNode {
-    pub label: usize,
-    pub children: Vec<InputNode>,
+#[derive(Clone, Debug)]
+pub struct NodeHandle {
+    ///parents pos in the node vector
+    pub parent: usize,
+    ///pos of the child in the edge vector
+    pub child: usize,
 }
 
-pub struct Node {
-    pub deleted: bool,
-    pub label: usize,
-    pub first_child: usize,
-    pub last_child: usize,
-}
-
+#[derive(Clone, Debug)]
 pub struct Leaf {
     pub deleted: bool,
-    pub label: usize,
+    pub data: Data,
 }
 
-pub struct Edge {
-    pub deleted: bool,
-    pub cluster: bool,
-    pub index: usize,
+pub enum Child {
+    ///A node and the option to set a request for number of children that will be added
+    Node(Node, Option<usize>),
+    ///A Leaf
+    Leaf(Leaf),
 }
 
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub enum ClusterID {
     Leaf {
         ///The label identifier
@@ -42,15 +40,62 @@ pub enum ClusterID {
     },
 }
 
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub enum MergeType {
-    A,
+    AB,
 
     C,
 
-    D,
+    DE,
 }
 
+#[derive(Clone, Debug)]
+pub enum Data {
+    Label(usize),
+    Cluster(usize),
+}
+
+
+
+#[derive(Clone, Debug)]
+/// A Node in the Input Tree
+/// assert all children between first and last child are not deleted
+pub struct Node {
+    pub deleted: bool,
+    pub data: Data,
+    ///The position of the first child in the edges array (inclusive)
+    pub first_child: usize,
+    ///The position of the last child in the edges array (exclusive)
+    pub last_child: usize,
+}
+
+impl Node {
+    pub fn new(label: usize) -> Node {
+        Node {
+            deleted: false,
+            data: Data::Label(label),
+            first_child: 0,
+            last_child: 0,
+        }
+    }
+}
+
+
+
+#[derive(Clone, Debug)]
+pub struct Edge {
+    pub deleted: bool,
+    pub index: usize,
+}
+
+impl Default for Edge {
+    fn default() -> Edge {
+        Edge { deleted: true, index: 0 }
+    }
+}
+
+
+/*
 pub struct SaveOption<T> {
     pub value: Option<T>,
 }
@@ -103,6 +148,8 @@ impl<T> DerefMut for SaveOption<T> {
         }
     }
 }
+*/
+
 
 #[derive(Debug)]
 pub enum ParseError {
