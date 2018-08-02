@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::error::Error;
 use std::io::Read;
-use std::fmt::{Debug, Formatter, Result, Write};
-use std::time::Instant;
+use std::fmt::{Debug, Formatter, Result, Write, Display};
+use std::time::{Instant, Duration};
+
 
 
 type GenError = Box<Error>;
@@ -91,9 +92,15 @@ impl TopTreeBuilder {
         }
 
         //build the TopDag
+        let mut step_1_time = Duration::new(0, 0);
+        let mut step_2_time = Duration::new(0, 0);
+
+        let mut number_of_steps = 0;
+
         while !builder.finished() {
             if cfg!(feature = "performance_test") {
-                println!("New Round:");
+                number_of_steps += 1;
+                println!("\nNew Round:");
                 let mut time_stamp = Instant::now();
 
                 builder.step_1();
@@ -112,7 +119,9 @@ impl TopTreeBuilder {
                     println!("Step 2 finished");
                     println!("{:?}", builder);
                 }
-                println!("Step 1 toke: {:?}, Step 2 toke: {:?}", first_timestamp, second_timestamp);
+                step_1_time += first_timestamp;
+                step_2_time += second_timestamp;
+                println!("\nStep 1 toke: {:?}, Step 2 toke: {:?}", first_timestamp, second_timestamp);
             } else {
                 builder.step_1();
                 if cfg!(feature = "debug") {
@@ -125,7 +134,10 @@ impl TopTreeBuilder {
                     println!("{:?}", builder);
                 }
             }
-
+        }
+        if cfg!(feature = "performance_test") {
+            println!("\nStep 1 overall toke: {:?}, Step 2 overall toke: {:?}", step_1_time, step_2_time);
+            println!("\nBuilding the DAG overall toke {:?} and {} rounds", step_1_time + step_2_time, number_of_steps);
         }
         builder
     }
@@ -489,6 +501,34 @@ impl Debug for TopTreeBuilder {
         }
 
         write!(f, "Debug info: \n{}", output)
+    }
+}
+
+impl Display for TopTreeBuilder {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        let mut output = String::new();
+
+        writeln!(output, "Number of unique labels {}", self.label_counter - 1)?;
+
+        writeln!(output, "Number of nodes in the IO Tree {}", self.nodes.len() - 1)?;
+
+        writeln!(output, "Number of Leafs in the IO Tree {}", self.leafs.len())?;
+
+        writeln!(output, "Number of Edges in the IO Tree {}", self.edges.len() - 1)?;
+
+        let mut number_of_leafs = 0;
+        let mut number_of_nodes = 0;
+        for (cluster_id, _number) in self.clusters.clone() {
+            match cluster_id {
+                ClusterID::Cluster {..} => {number_of_nodes += 1},
+                ClusterID::Leaf {..} => {number_of_leafs += 1},
+            }
+        }
+
+        writeln!(output, "Number of leafs in the TopDAG {}", number_of_leafs)?;
+        writeln!(output, "Number of nodes in the TopDAG {}", number_of_nodes)?;
+
+        write!(f,"{}", output)
     }
 }
 

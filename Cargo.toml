@@ -7,6 +7,6 @@ authors = ["uzdlm <jan.ellmers@yahoo.de>"]
 xml-rs = "0.7"
 
 [features]
-default = []
+default = ["performance_test"]
 debug = []
 performance_test = []
