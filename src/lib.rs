@@ -1,15 +1,18 @@
-extern crate xml;
+extern crate quick_xml;
+
+use quick_xml::Reader;
+use quick_xml::events::Event;
+
 
 mod structs;
 
-use xml::reader::{EventReader, XmlEvent};
-
 use structs::{Node, Leaf, Edge, ClusterID, ParseError, Child, NodeHandle, MergeType, Data};
+
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::error::Error;
-use std::io::Read;
+use std::io::BufReader;
 use std::fmt::{Debug, Formatter, Result, Write, Display};
 use std::time::{Instant, Duration};
 
@@ -37,15 +40,15 @@ pub struct TopTreeBuilder {
 impl TopTreeBuilder {
     pub fn new_from_xml(path: &str) -> GenResult<TopTreeBuilder> {
         let file = File::open(path)?;
-        let mut reader = EventReader::new(file);
+        let mut reader = Reader::from_reader(BufReader::new(file));
 
         let root;
         if cfg!(feature = "performance_test") {
             let time_stamp = Instant::now();
-            root = parse_xml(&mut reader, None)?;
+            root = parse_xml(&mut reader)?;
             println!("Converting the XML to the IO tree toke: {:?}", time_stamp.elapsed());
         } else {
-            root = parse_xml(&mut reader, None)?;
+            root = parse_xml(&mut reader)?;
         }
 
         Ok(TopTreeBuilder::new_from_IO_tree(root))
@@ -539,55 +542,58 @@ pub struct IO_Tree {
     pub children: Vec<IO_Tree>,
 }
 
-fn parse_xml<B: Read> (mut reader: &mut EventReader<B>, mut node: Option<IO_Tree>) -> GenResult<IO_Tree> {
+fn parse_xml (reader: &mut Reader<BufReader<File>>) -> GenResult<IO_Tree> {
+    let mut buf = Vec::new();
+
+    let mut node_stack = Vec::new();
+
     'filereader: loop {
-        match reader.next()? {
-            XmlEvent::EndElement {
-                name
-            } => {
-                if let Some(elem) = node {
-                    //check if label is the same
-                    if name.to_string() == elem.label {
-                        return Ok(elem);
-                    } else {
-                        return Err(Box::new(ParseError::CannotParse));
+        match reader.read_event(&mut buf) {
+            Ok(Event::Start(ref elem)) => {
+                let label = String::from_utf8_lossy(elem.name()).to_string();
+
+                node_stack.push(IO_Tree {
+                    label,
+                    children: Vec::new(),
+                });
+            },
+
+            Ok(Event::End(ref elem)) => {
+                let label = String::from_utf8_lossy(elem.name()).to_string();
+                if let Some(node) = node_stack.pop() {
+                    if node.label != label {return Err(Box::new(ParseError::CannotParse));}
+                    if let Some(last) = node_stack.len().checked_sub(1) {
+                        //node is not root so we push it to its parent
+                        node_stack[last].children.push(node);
+                    } else { //push the root back on the stack
+                        node_stack.push(node);
                     }
-                }
-            },
-
-            XmlEvent::StartElement {
-                ref name,
-                attributes: _,
-                namespace: _,
-            } => {
-                //build new node
-                if let Some(ref mut elem) = node {
-                    let new_elem = IO_Tree {
-                        label: name.to_string(),
-                        children: Vec::new(),
-                    };
-
-                    elem.children.push(parse_xml(&mut reader, Some(new_elem))?);
                 } else {
-                    let root = IO_Tree {
-                        label: name.to_string(),
-                        children: Vec::new(),
-                    };
-                    return parse_xml(&mut reader, Some(root));
+                    return Err(Box::new(ParseError::CannotParse));
                 }
             },
 
-            XmlEvent::EndDocument => {
-                return Err(Box::new(ParseError::CannotParse));
+            Ok(Event::Eof) => break 'filereader, // exits the loop when reaching end of file
 
+            Err(_) => {
+                return Err(Box::new(ParseError::CannotParse))
             },
 
-            XmlEvent::Characters(_)
-            | XmlEvent::Whitespace(..)
-            | XmlEvent::Comment(..)
-            | XmlEvent::CData(_)
-            | XmlEvent::StartDocument { .. }
-            | XmlEvent::ProcessingInstruction { .. } => { continue },
+            _ => (), // There are several other `Event`s we do not consider here
         }
+
+        // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
+        buf.clear();
     }
+
+    if let Some(root) = node_stack.pop() {
+        if node_stack.is_empty() {
+            Ok(root)
+        } else {
+            Err(Box::new(ParseError::CannotParse))
+        }
+    } else {
+        Err(Box::new(ParseError::CannotParse))
+    }
+
 }

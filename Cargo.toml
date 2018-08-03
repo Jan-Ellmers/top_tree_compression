@@ -5,8 +5,14 @@ authors = ["uzdlm <jan.ellmers@yahoo.de>"]
 
 [dependencies]
 xml-rs = "0.7"
+quick-xml = "0.12.1"
 
 [features]
 default = ["performance_test"]
+
+#Puts out debug information
+#Waruning not recomanded for large files as this gives a lot of information
 debug = []
+
+#Messures and prints the time each Step takes
 performance_test = []
