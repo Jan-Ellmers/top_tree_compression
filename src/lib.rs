@@ -15,7 +15,7 @@ use std::error::Error;
 use std::io::BufReader;
 use std::fmt::{Debug, Formatter, Result, Write, Display};
 use std::time::{Instant, Duration};
-
+use std::str::FromStr;
 
 
 type GenError = Box<Error>;
@@ -24,31 +24,25 @@ type GenResult<T> = std::result::Result<T, GenError>;
 const DUMMY_NODE_LABEL: &str = "Dummy_node";
 
 pub struct TopTreeBuilder {
-    label_counter: usize,
     labels: HashMap<String, usize>,
     nodes: Vec<Node>,
     leafs: Vec<Leaf>,
     edges: Vec<Edge>,
-    cluster_counter: usize,
     clusters: HashMap<ClusterID, usize>,
 
-    //for Debug
     cluster_vector: Vec<(ClusterID, usize)>,
     label_vector: Vec<(String, usize)>,
 }
 
 impl TopTreeBuilder {
     pub fn new_from_xml(path: &str) -> GenResult<TopTreeBuilder> {
-        let file = File::open(path)?;
-        let mut reader = Reader::from_reader(BufReader::new(file));
-
         let root;
         if cfg!(feature = "performance_test") {
             let time_stamp = Instant::now();
-            root = parse_xml(&mut reader)?;
+            root = IO_Tree::new_from_xml(path)?;
             println!("Converting the XML to the IO tree toke: {:?}", time_stamp.elapsed());
         } else {
-            root = parse_xml(&mut reader)?;
+            root = IO_Tree::new_from_xml(path)?;
         }
 
         Ok(TopTreeBuilder::new_from_IO_tree(root))
@@ -57,12 +51,10 @@ impl TopTreeBuilder {
     #[allow(non_snake_case)]
     pub fn new_from_IO_tree(tree: IO_Tree) -> TopTreeBuilder {
         let mut builder = TopTreeBuilder {
-            label_counter: 0,
             labels: HashMap::new(),
             nodes: Vec::with_capacity(4_000_000),
             leafs: Vec::with_capacity(4_000_000),
             edges: Vec::with_capacity(4_000_000),
-            cluster_counter: 0,
             clusters: HashMap::new(),
 
             cluster_vector: Vec::new(),
@@ -143,6 +135,91 @@ impl TopTreeBuilder {
             println!("\nBuilding the DAG overall toke {:?} and {} rounds", step_1_time + step_2_time, number_of_steps);
         }
         builder
+    }
+
+    #[allow(non_snake_case)]
+    pub fn into_IO_tree(self) -> IO_Tree {
+        let mut dummy_node = IO_Tree {
+            label: DUMMY_NODE_LABEL.to_owned(),
+            children: Vec::new(),
+        };
+
+        dummy_node.children.push(IO_Tree {
+            label: (self.cluster_vector.len() - 1).to_string(),
+            children: Vec::new(),
+        });
+
+        self.rec_into_IO_tree(&mut dummy_node, 0);
+
+        assert!(dummy_node.children.len() == 1);
+        dummy_node.children.pop().unwrap()
+    }
+
+    #[allow(non_snake_case)]
+    fn rec_into_IO_tree(&self, parent: &mut IO_Tree, index: usize) {
+        if let Ok(cluster_index) = usize::from_str(&parent.children[index].label) {
+            let (cluster, _index) = &self.cluster_vector[cluster_index];
+            assert!(*_index == cluster_index);
+
+            match cluster {
+                ClusterID::Cluster {merge_type: MergeType::AB, first_child, second_child} => {
+                    //we add the first cluster over the second. The existing child transforms to the second cluster
+
+                    let new_node = IO_Tree {
+                        label: first_child.to_string(),
+                        children: Vec::new(),
+                    };
+
+                    //swap child and new_node
+                    parent.children.push(new_node);
+                    let mut second_cluster = parent.children.swap_remove(index);
+
+                    //change the label of the old child
+                    second_cluster.label = second_child.to_string();
+
+                    //push the child back into the tree
+                    parent.children[index].children.push(second_cluster);
+
+                    //rec call on both nodes
+                    self.rec_into_IO_tree(&mut parent.children[index], 0);
+
+                    self.rec_into_IO_tree(parent, index);
+                },
+
+                ClusterID::Cluster {merge_type: MergeType::C, first_child, second_child} => {
+                    parent.children[index].label = first_child.to_string();
+
+                    parent.children.insert(index + 1, IO_Tree {
+                        label: second_child.to_string(),
+                        children: Vec::new(),
+                    });
+
+                    //rec call on both nodes
+                    self.rec_into_IO_tree(parent, index + 1);
+
+                    self.rec_into_IO_tree(parent, index);
+                },
+
+                ClusterID::Cluster {merge_type: MergeType::DE, first_child, second_child} => {
+                    parent.children[index].label = second_child.to_string();
+
+                    parent.children.insert(index, IO_Tree {
+                        label: first_child.to_string(),
+                        children: Vec::new(),
+                    });
+
+                    //rec call on both nodes
+                    self.rec_into_IO_tree(parent, index + 1);
+
+                    self.rec_into_IO_tree(parent, index);
+                },
+
+                ClusterID::Leaf {label} => {
+                    let (ref label, _) = self.label_vector[*label];
+                    parent.children[index].label = label.to_owned();
+                },
+            }
+        } else {panic!("Error: Database is corrupt")}
     }
 
     /// computes if we have finished the TopDag building
@@ -312,15 +389,12 @@ impl TopTreeBuilder {
 
     /// adds a cluster to the Cluster HashMap returns the key of the new added cluster
     fn add_cluster(&mut self, cluster: ClusterID) -> usize {
-        let mut cluster_id = self.cluster_counter;
+        let mut cluster_id = self.cluster_vector.len();
         if let Some(old_cluster_id) = self.clusters.insert(cluster.clone(), cluster_id) {
             self.clusters.insert(cluster.clone(), old_cluster_id);
             cluster_id = old_cluster_id;
         } else { //cluster was not inserted jet
-            if cfg!(feature = "debug") {
-                self.cluster_vector.push((cluster, cluster_id));
-            }
-            self.cluster_counter += 1;
+            self.cluster_vector.push((cluster, cluster_id));
         }
         cluster_id
     }
@@ -344,15 +418,12 @@ impl TopTreeBuilder {
     }
 
     fn insert_label(&mut self, name: &String) -> usize {
-        let mut label_id = self.label_counter;
+        let mut label_id = self.label_vector.len();
         if let Some(old_label) = self.labels.insert(name.clone(), label_id) {
             self.labels.insert(name.clone(), old_label);
             label_id = old_label;
         } else { //label was not inserted jet
-            if cfg!(feature = "debug") {
-                self.label_vector.push((name.to_string(), label_id));
-            }
-            self.label_counter += 1;
+            self.label_vector.push((name.to_string(), label_id));
         }
         label_id
     }
@@ -511,7 +582,7 @@ impl Display for TopTreeBuilder {
     fn fmt(&self, f: &mut Formatter) -> Result {
         let mut output = String::new();
 
-        writeln!(output, "Number of unique labels {}", self.label_counter - 1)?;
+        writeln!(output, "Number of unique labels {}", self.labels.len() - 1)?;
 
         writeln!(output, "Number of nodes in the IO Tree {}", self.nodes.len() - 1)?;
 
@@ -535,65 +606,69 @@ impl Display for TopTreeBuilder {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(non_camel_case_types)]
 pub struct IO_Tree {
     pub label: String,
     pub children: Vec<IO_Tree>,
 }
 
-fn parse_xml (reader: &mut Reader<BufReader<File>>) -> GenResult<IO_Tree> {
-    let mut buf = Vec::new();
+impl IO_Tree {
+    pub fn new_from_xml (path: &str) -> GenResult<IO_Tree> {
+        let file = File::open(path)?;
+        let mut reader = Reader::from_reader(BufReader::new(file));
 
-    let mut node_stack = Vec::new();
+        let mut buf = Vec::new();
 
-    'filereader: loop {
-        match reader.read_event(&mut buf) {
-            Ok(Event::Start(ref elem)) => {
-                let label = String::from_utf8_lossy(elem.name()).to_string();
+        let mut node_stack = Vec::new();
 
-                node_stack.push(IO_Tree {
-                    label,
-                    children: Vec::new(),
-                });
-            },
+        'filereader: loop {
+            match reader.read_event(&mut buf) {
+                Ok(Event::Start(ref elem)) => {
+                    let label = String::from_utf8_lossy(elem.name()).to_string();
 
-            Ok(Event::End(ref elem)) => {
-                let label = String::from_utf8_lossy(elem.name()).to_string();
-                if let Some(node) = node_stack.pop() {
-                    if node.label != label {return Err(Box::new(ParseError::CannotParse));}
-                    if let Some(last) = node_stack.len().checked_sub(1) {
-                        //node is not root so we push it to its parent
-                        node_stack[last].children.push(node);
-                    } else { //push the root back on the stack
-                        node_stack.push(node);
+                    node_stack.push(IO_Tree {
+                        label,
+                        children: Vec::new(),
+                    });
+                },
+
+                Ok(Event::End(ref elem)) => {
+                    let label = String::from_utf8_lossy(elem.name()).to_string();
+                    if let Some(node) = node_stack.pop() {
+                        if node.label != label {return Err(Box::new(ParseError::CannotParse));}
+                        if let Some(last) = node_stack.len().checked_sub(1) {
+                            //node is not root so we push it to its parent
+                            node_stack[last].children.push(node);
+                        } else { //push the root back on the stack
+                            node_stack.push(node);
+                        }
+                    } else {
+                        return Err(Box::new(ParseError::CannotParse));
                     }
-                } else {
-                    return Err(Box::new(ParseError::CannotParse));
-                }
-            },
+                },
 
-            Ok(Event::Eof) => break 'filereader, // exits the loop when reaching end of file
+                Ok(Event::Eof) => break 'filereader, // exits the loop when reaching end of file
 
-            Err(_) => {
-                return Err(Box::new(ParseError::CannotParse))
-            },
+                Err(_) => {
+                    return Err(Box::new(ParseError::CannotParse))
+                },
 
-            _ => (), // There are several other `Event`s we do not consider here
+                _ => (), // There are several other `Event`s we do not consider here
+            }
+
+            // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
+            buf.clear();
         }
 
-        // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
-        buf.clear();
-    }
-
-    if let Some(root) = node_stack.pop() {
-        if node_stack.is_empty() {
-            Ok(root)
+        if let Some(root) = node_stack.pop() {
+            if node_stack.is_empty() {
+                Ok(root)
+            } else {
+                Err(Box::new(ParseError::CannotParse))
+            }
         } else {
             Err(Box::new(ParseError::CannotParse))
         }
-    } else {
-        Err(Box::new(ParseError::CannotParse))
     }
-
 }
