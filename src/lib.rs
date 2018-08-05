@@ -95,7 +95,6 @@ impl TopTreeBuilder {
         while !builder.finished() {
             if cfg!(feature = "performance_test") {
                 number_of_steps += 1;
-                println!("\nNew Round:");
                 let mut time_stamp = Instant::now();
 
                 builder.step_1();
@@ -116,7 +115,7 @@ impl TopTreeBuilder {
                 }
                 step_1_time += first_timestamp;
                 step_2_time += second_timestamp;
-                println!("\nStep 1 toke: {:?}, Step 2 toke: {:?}", first_timestamp, second_timestamp);
+                println!("Step 1 toke: {:?}, Step 2 toke: {:?}", first_timestamp, second_timestamp);
             } else {
                 builder.step_1();
                 if cfg!(feature = "debug") {
@@ -149,7 +148,13 @@ impl TopTreeBuilder {
             children: Vec::new(),
         });
 
-        self.rec_into_IO_tree(&mut dummy_node, 0);
+        if cfg!(feature = "performance_test") {
+            let time_stamp = Instant::now();
+            self.rec_into_IO_tree(&mut dummy_node, 0);
+            println!("Decompression of the TopDag toke: {:?}", time_stamp.elapsed());
+        } else {
+            self.rec_into_IO_tree(&mut dummy_node, 0);
+        }
 
         assert!(dummy_node.children.len() == 1);
         dummy_node.children.pop().unwrap()
@@ -528,6 +533,32 @@ impl TopTreeBuilder {
         //adjust last child
         self.nodes[parent].last_child = backward_index;
     }
+
+    fn display_subroutine(&self, f: &mut Formatter) -> Result {
+        let mut output = String::new();
+
+        writeln!(output, "Number of unique labels {}", self.labels.len() - 1)?;
+
+        writeln!(output, "Number of nodes in the IO Tree {}", self.nodes.len() - 1)?;
+
+        writeln!(output, "Number of Leafs in the IO Tree {}", self.leafs.len())?;
+
+        writeln!(output, "Number of Edges in the IO Tree {}", self.edges.len() - 1)?;
+
+        let mut number_of_leafs = 0;
+        let mut number_of_nodes = 0;
+        for (cluster_id, _number) in self.clusters.clone() {
+            match cluster_id {
+                ClusterID::Cluster {..} => {number_of_nodes += 1},
+                ClusterID::Leaf {..} => {number_of_leafs += 1},
+            }
+        }
+
+        writeln!(output, "Number of leafs in the TopDAG {}", number_of_leafs)?;
+        writeln!(output, "Number of nodes in the TopDAG {}", number_of_nodes)?;
+
+        write!(f,"{}", output)
+    }
 }
 
 impl Debug for TopTreeBuilder {
@@ -580,29 +611,15 @@ impl Debug for TopTreeBuilder {
 
 impl Display for TopTreeBuilder {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        let mut output = String::new();
-
-        writeln!(output, "Number of unique labels {}", self.labels.len() - 1)?;
-
-        writeln!(output, "Number of nodes in the IO Tree {}", self.nodes.len() - 1)?;
-
-        writeln!(output, "Number of Leafs in the IO Tree {}", self.leafs.len())?;
-
-        writeln!(output, "Number of Edges in the IO Tree {}", self.edges.len() - 1)?;
-
-        let mut number_of_leafs = 0;
-        let mut number_of_nodes = 0;
-        for (cluster_id, _number) in self.clusters.clone() {
-            match cluster_id {
-                ClusterID::Cluster {..} => {number_of_nodes += 1},
-                ClusterID::Leaf {..} => {number_of_leafs += 1},
-            }
+        let to_return;
+        if cfg!(feature = "performance_test") {
+            let time_stamp = Instant::now();
+            to_return = self.display_subroutine(f);
+            println!("Calculating the statistics toke: {:?}", time_stamp.elapsed());
+        } else {
+            to_return = self.display_subroutine(f);
         }
-
-        writeln!(output, "Number of leafs in the TopDAG {}", number_of_leafs)?;
-        writeln!(output, "Number of nodes in the TopDAG {}", number_of_nodes)?;
-
-        write!(f,"{}", output)
+        to_return
     }
 }
 
