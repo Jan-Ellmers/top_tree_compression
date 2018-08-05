@@ -9,7 +9,7 @@ mod structs;
 use structs::{Node, Leaf, Edge, ClusterID, ParseError, Child, NodeHandle, MergeType, Data};
 
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::error::Error;
 use std::io::BufReader;
@@ -140,12 +140,12 @@ impl TopTreeBuilder {
     pub fn into_IO_tree(self) -> IO_Tree {
         let mut dummy_node = IO_Tree {
             label: DUMMY_NODE_LABEL.to_owned(),
-            children: Vec::new(),
+            children: VecDeque::new(),
         };
 
-        dummy_node.children.push(IO_Tree {
+        dummy_node.children.push_back(IO_Tree {
             label: (self.cluster_vector.len() - 1).to_string(),
-            children: Vec::new(),
+            children: VecDeque::new(),
         });
 
         if cfg!(feature = "performance_test") {
@@ -157,7 +157,7 @@ impl TopTreeBuilder {
         }
 
         assert!(dummy_node.children.len() == 1);
-        dummy_node.children.pop().unwrap()
+        dummy_node.children.pop_back().unwrap()
     }
 
     #[allow(non_snake_case)]
@@ -172,18 +172,18 @@ impl TopTreeBuilder {
 
                     let new_node = IO_Tree {
                         label: first_child.to_string(),
-                        children: Vec::new(),
+                        children: VecDeque::new(),
                     };
 
                     //swap child and new_node
-                    parent.children.push(new_node);
-                    let mut second_cluster = parent.children.swap_remove(index);
+                    parent.children.push_back(new_node);
+                    let mut second_cluster = parent.children.swap_remove_back(index).unwrap();
 
                     //change the label of the old child
                     second_cluster.label = second_child.to_string();
 
                     //push the child back into the tree
-                    parent.children[index].children.push(second_cluster);
+                    parent.children[index].children.push_back(second_cluster);
 
                     //rec call on both nodes
                     self.rec_into_IO_tree(&mut parent.children[index], 0);
@@ -196,7 +196,7 @@ impl TopTreeBuilder {
 
                     parent.children.insert(index + 1, IO_Tree {
                         label: second_child.to_string(),
-                        children: Vec::new(),
+                        children: VecDeque::new(),
                     });
 
                     //rec call on both nodes
@@ -210,7 +210,7 @@ impl TopTreeBuilder {
 
                     parent.children.insert(index, IO_Tree {
                         label: first_child.to_string(),
-                        children: Vec::new(),
+                        children: VecDeque::new(),
                     });
 
                     //rec call on both nodes
@@ -627,7 +627,7 @@ impl Display for TopTreeBuilder {
 #[allow(non_camel_case_types)]
 pub struct IO_Tree {
     pub label: String,
-    pub children: Vec<IO_Tree>,
+    pub children: VecDeque<IO_Tree>,
 }
 
 impl IO_Tree {
@@ -646,7 +646,7 @@ impl IO_Tree {
 
                     node_stack.push(IO_Tree {
                         label,
-                        children: Vec::new(),
+                        children: VecDeque::new(),
                     });
                 },
 
@@ -656,7 +656,7 @@ impl IO_Tree {
                         if node.label != label {return Err(Box::new(ParseError::CannotParse));}
                         if let Some(last) = node_stack.len().checked_sub(1) {
                             //node is not root so we push it to its parent
-                            node_stack[last].children.push(node);
+                            node_stack[last].children.push_back(node);
                         } else { //push the root back on the stack
                             node_stack.push(node);
                         }
