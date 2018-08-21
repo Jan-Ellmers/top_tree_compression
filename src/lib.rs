@@ -3,7 +3,8 @@ extern crate quick_xml;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-
+#[macro_use]
+mod macros;
 mod structs;
 
 use structs::{Node, Leaf, Edge, ClusterID, ParseError, Child, NodeHandle, MergeType, Data};
@@ -24,11 +25,13 @@ type GenResult<T> = std::result::Result<T, GenError>;
 const DUMMY_NODE_LABEL: &str = "Dummy_node";
 
 pub struct TopTreeBuilder {
-    labels: HashMap<String, usize>,
     nodes: Vec<Node>,
     leafs: Vec<Leaf>,
     edges: Vec<Edge>,
+
+
     clusters: HashMap<ClusterID, usize>,
+    labels: HashMap<String, usize>,
 
     cluster_vector: Vec<(ClusterID, usize)>,
     label_vector: Vec<(String, usize)>,
@@ -36,14 +39,7 @@ pub struct TopTreeBuilder {
 
 impl TopTreeBuilder {
     pub fn new_from_xml(path: &str) -> GenResult<TopTreeBuilder> {
-        let root;
-        if cfg!(feature = "performance_test") {
-            let time_stamp = Instant::now();
-            root = IO_Tree::new_from_xml(path)?;
-            println!("Converting the XML to the IO tree toke: {:?}", time_stamp.elapsed());
-        } else {
-            root = IO_Tree::new_from_xml(path)?;
-        }
+        let root = measure_performance!(IO_Tree::new_from_xml(path)?, "Converting the XML to the IO tree toke:");
 
         Ok(TopTreeBuilder::new_from_IO_tree(root))
     }
@@ -51,11 +47,13 @@ impl TopTreeBuilder {
     #[allow(non_snake_case)]
     pub fn new_from_IO_tree(tree: IO_Tree) -> TopTreeBuilder {
         let mut builder = TopTreeBuilder {
-            labels: HashMap::new(),
             nodes: Vec::with_capacity(4_000_000),
             leafs: Vec::with_capacity(4_000_000),
             edges: Vec::with_capacity(4_000_000),
+
+
             clusters: HashMap::new(),
+            labels: HashMap::new(),
 
             cluster_vector: Vec::new(),
             label_vector: Vec::new(),
@@ -78,13 +76,7 @@ impl TopTreeBuilder {
         let root_addr = builder.push_child(0, child);
 
         //insert the tree
-        if cfg!(feature = "performance_test") {
-            let time_stamp = Instant::now();
-                builder.rec_insert_tree(root_addr, tree);
-            println!("Parsing the IO tree toke: {:?}", time_stamp.elapsed());
-        } else {
-            builder.rec_insert_tree(root_addr, tree);
-        }
+        measure_performance!(builder.rec_insert_tree(root_addr, tree), "Parsing the IO tree toke:");
 
         //build the TopDag
         let mut step_1_time = Duration::new(0, 0);
@@ -100,39 +92,33 @@ impl TopTreeBuilder {
                 builder.step_1();
 
                 let first_timestamp = time_stamp.elapsed();
-                if cfg!(feature = "debug") {
-                    println!("Step 1 finished");
-                    println!("{:?}", builder);
-                }
+                debug!("Step 1 finished\n{:?}", builder);
                 time_stamp = Instant::now();
 
                 builder.step_2();
 
                 let second_timestamp = time_stamp.elapsed();
-                if cfg!(feature = "debug") {
-                    println!("Step 2 finished");
-                    println!("{:?}", builder);
-                }
+                debug!("Step 2 finished\n{:?}", builder);
                 step_1_time += first_timestamp;
                 step_2_time += second_timestamp;
                 println!("Step 1 toke: {:?}, Step 2 toke: {:?}", first_timestamp, second_timestamp);
             } else {
                 builder.step_1();
-                if cfg!(feature = "debug") {
-                    println!("Step 1 finished");
-                    println!("{:?}", builder);
-                }
+                debug!("Step 1 finished\n{:?}", builder);
                 builder.step_2();
-                if cfg!(feature = "debug") {
-                    println!("Step 2 finished");
-                    println!("{:?}", builder);
-                }
+                debug!("Step 2 finished\n{:?}", builder);
             }
         }
         if cfg!(feature = "performance_test") {
             println!("\nStep 1 overall toke: {:?}, Step 2 overall toke: {:?}", step_1_time, step_2_time);
             println!("\nBuilding the DAG overall toke {:?} and {} rounds", step_1_time + step_2_time, number_of_steps);
         }
+
+        //clear the unneeded vectors
+        builder.nodes.clear();
+        builder.leafs.clear();
+        builder.edges.clear();
+
         builder
     }
 
@@ -148,13 +134,7 @@ impl TopTreeBuilder {
             children: VecDeque::new(),
         });
 
-        if cfg!(feature = "performance_test") {
-            let time_stamp = Instant::now();
-            self.rec_into_IO_tree(&mut dummy_node, 0);
-            println!("Decompression of the TopDag toke: {:?}", time_stamp.elapsed());
-        } else {
-            self.rec_into_IO_tree(&mut dummy_node, 0);
-        }
+        measure_performance!(self.rec_into_IO_tree(&mut dummy_node, 0), "Decompression of the TopDag toke:");
 
         assert!(dummy_node.children.len() == 1);
         dummy_node.children.pop_back().unwrap()
@@ -611,15 +591,7 @@ impl Debug for TopTreeBuilder {
 
 impl Display for TopTreeBuilder {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        let to_return;
-        if cfg!(feature = "performance_test") {
-            let time_stamp = Instant::now();
-            to_return = self.display_subroutine(f);
-            println!("Calculating the statistics toke: {:?}", time_stamp.elapsed());
-        } else {
-            to_return = self.display_subroutine(f);
-        }
-        to_return
+        measure_performance!(self.display_subroutine(f), "Calculating the statistics toke:")
     }
 }
 

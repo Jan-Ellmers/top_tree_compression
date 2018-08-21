@@ -8,7 +8,7 @@ xml-rs = "0.7"
 quick-xml = "0.12.1"
 
 [features]
-default = ["performance_test"]
+default = ["performance_test", "debug"]
 
 #Puts out debug information
 #Waruning not recomanded for large files as this gives a lot of information
