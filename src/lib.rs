@@ -7,7 +7,7 @@ use quick_xml::events::Event;
 mod macros;
 mod structs;
 
-use structs::{Node, Leaf, Edge, ClusterID, ParseError, Child, NodeHandle, MergeType, Data};
+use structs::{Node, Leaf, Edge, Cluster, ParseError, Child, NodeHandle, MergeType, Data, Uninitialized};
 
 
 use std::collections::{HashMap, VecDeque};
@@ -30,11 +30,11 @@ pub struct TopTreeBuilder {
     edges: Vec<Edge>,
 
 
-    clusters: HashMap<ClusterID, usize>,
+    clusters: HashMap<Cluster, usize>,
     labels: HashMap<String, usize>,
 
-    cluster_vector: Vec<(ClusterID, usize)>,
-    label_vector: Vec<(String, usize)>,
+    cluster_vector: Vec<Cluster>,
+    label_vector: Vec<String>,
 }
 
 impl TopTreeBuilder {
@@ -115,9 +115,9 @@ impl TopTreeBuilder {
         }
 
         //clear the unneeded vectors
-        builder.nodes.clear();
-        builder.leafs.clear();
-        builder.edges.clear();
+        //builder.nodes.clear();
+        //builder.leafs.clear();
+        //builder.edges.clear();
 
         builder
     }
@@ -130,7 +130,7 @@ impl TopTreeBuilder {
         };
 
         dummy_node.children.push_back(IO_Tree {
-            label: (self.cluster_vector.len() - 1).to_string(),
+            label: (self.cluster_vector.len() - 1 + self.label_vector.len()).to_string(),
             children: VecDeque::new(),
         });
 
@@ -142,68 +142,71 @@ impl TopTreeBuilder {
 
     #[allow(non_snake_case)]
     fn rec_into_IO_tree(&self, parent: &mut IO_Tree, index: usize) {
-        if let Ok(cluster_index) = usize::from_str(&parent.children[index].label) {
-            let (cluster, _index) = &self.cluster_vector[cluster_index];
-            assert!(*_index == cluster_index);
+        if let Ok(mut cluster_index) = usize::from_str(&parent.children[index].label) {
+            if cluster_index < self.label_vector.len() {
+                //we have a leaf
+                let label = &self.label_vector[cluster_index];
+                parent.children[index].label = label.to_owned();
+            } else {
+                cluster_index -= self.label_vector.len();
+                let cluster = &self.cluster_vector[cluster_index];
 
-            match cluster {
-                ClusterID::Cluster {merge_type: MergeType::AB, first_child, second_child} => {
-                    //we add the first cluster over the second. The existing child transforms to the second cluster
+                match cluster {
+                    Cluster {merge_type: MergeType::AB, first_child, second_child} => {
+                        //we add the first cluster over the second. The existing child transforms to the second cluster
 
-                    let new_node = IO_Tree {
-                        label: first_child.to_string(),
-                        children: VecDeque::new(),
-                    };
+                        let new_node = IO_Tree {
+                            label: first_child.to_string(),
+                            children: VecDeque::new(),
+                        };
 
-                    //swap child and new_node
-                    parent.children.push_back(new_node);
-                    let mut second_cluster = parent.children.swap_remove_back(index).unwrap();
+                        //swap child and new_node
+                        parent.children.push_back(new_node);
+                        let mut second_cluster = parent.children.swap_remove_back(index).unwrap();
 
-                    //change the label of the old child
-                    second_cluster.label = second_child.to_string();
+                        //change the label of the old child
+                        second_cluster.label = second_child.to_string();
 
-                    //push the child back into the tree
-                    parent.children[index].children.push_back(second_cluster);
+                        //push the child back into the tree
+                        parent.children[index].children.push_back(second_cluster);
 
-                    //rec call on both nodes
-                    self.rec_into_IO_tree(&mut parent.children[index], 0);
+                        //rec call on both nodes
+                        self.rec_into_IO_tree(&mut parent.children[index], 0);
 
-                    self.rec_into_IO_tree(parent, index);
-                },
+                        self.rec_into_IO_tree(parent, index);
+                    },
 
-                ClusterID::Cluster {merge_type: MergeType::C, first_child, second_child} => {
-                    parent.children[index].label = first_child.to_string();
+                    Cluster {merge_type: MergeType::C, first_child, second_child} => {
+                        parent.children[index].label = first_child.to_string();
 
-                    parent.children.insert(index + 1, IO_Tree {
-                        label: second_child.to_string(),
-                        children: VecDeque::new(),
-                    });
+                        parent.children.insert(index + 1, IO_Tree {
+                            label: second_child.to_string(),
+                            children: VecDeque::new(),
+                        });
 
-                    //rec call on both nodes
-                    self.rec_into_IO_tree(parent, index + 1);
+                        //rec call on both nodes
+                        self.rec_into_IO_tree(parent, index + 1);
 
-                    self.rec_into_IO_tree(parent, index);
-                },
+                        self.rec_into_IO_tree(parent, index);
+                    },
 
-                ClusterID::Cluster {merge_type: MergeType::DE, first_child, second_child} => {
-                    parent.children[index].label = second_child.to_string();
+                    Cluster {merge_type: MergeType::DE, first_child, second_child} => {
+                        parent.children[index].label = second_child.to_string();
 
-                    parent.children.insert(index, IO_Tree {
-                        label: first_child.to_string(),
-                        children: VecDeque::new(),
-                    });
+                        parent.children.insert(index, IO_Tree {
+                            label: first_child.to_string(),
+                            children: VecDeque::new(),
+                        });
 
-                    //rec call on both nodes
-                    self.rec_into_IO_tree(parent, index + 1);
+                        //rec call on both nodes
+                        self.rec_into_IO_tree(parent, index + 1);
 
-                    self.rec_into_IO_tree(parent, index);
-                },
-
-                ClusterID::Leaf {label} => {
-                    let (ref label, _) = self.label_vector[*label];
-                    parent.children[index].label = label.to_owned();
-                },
+                        self.rec_into_IO_tree(parent, index);
+                    },
+                }
             }
+
+
         } else {panic!("Error: Database is corrupt")}
     }
 
@@ -291,12 +294,14 @@ impl TopTreeBuilder {
     fn merge(&mut self, first_cluster: NodeHandle, second_cluster: NodeHandle, merge_type: MergeType) {
         use MergeType::{AB,C,DE};
         //get the id of the new cluster
-        let cluster_id = ClusterID::Cluster {
+        let first_node = self.edges[first_cluster.child].index;
+        let second_node = self.edges[second_cluster.child].index;
+        let cluster = Cluster {
             merge_type: merge_type.clone(),
-            first_child: self.get_cluster_id_from_child(first_cluster.child),
-            second_child: self.get_cluster_id_from_child(second_cluster.child),
+            first_child: self.get_cluster_id_from_node(first_node),
+            second_child: self.get_cluster_id_from_node(second_node),
         };
-        let cluster_id = self.add_cluster(cluster_id);
+        let cluster_id = self.add_cluster(cluster);
 
         match merge_type {
             AB => { //means A or B
@@ -352,19 +357,18 @@ impl TopTreeBuilder {
     /// builds a cluster from the child
     /// child must be an index from the edge array
     /// returns the usize identifier from the child
-    fn get_cluster_id_from_child(&mut self, child: usize) -> usize {
-        let node_index = self.edges[child].index;
-        let node_data = if node_index < usize::max_value() >> 1 {
+    fn get_cluster_id_from_node(&mut self, node: usize) -> usize {
+        let node_data = if node < usize::max_value() >> 1 {
             //child is a node
-            self.nodes[node_index].data.clone()
+            self.nodes[node].data.clone()
         } else {
             //child is a leaf
-            self.leafs[node_index - (usize::max_value() >> 1)].data.clone()
+            self.leafs[node - (usize::max_value() >> 1)].data.clone()
         };
 
         match node_data {
-            Data::Label(id) => { //we have to add the cluster first
-                self.add_cluster(ClusterID::Leaf {label: id})
+            Data::Label(id) => { //we give the id of the lable
+                id
             },
             Data::Cluster(id) => { //we already have a cluster so we just return the id
                 id
@@ -373,13 +377,13 @@ impl TopTreeBuilder {
     }
 
     /// adds a cluster to the Cluster HashMap returns the key of the new added cluster
-    fn add_cluster(&mut self, cluster: ClusterID) -> usize {
-        let mut cluster_id = self.cluster_vector.len();
+    fn add_cluster(&mut self, cluster: Cluster) -> usize {
+        let mut cluster_id = self.cluster_vector.len() + self.label_vector.len();
         if let Some(old_cluster_id) = self.clusters.insert(cluster.clone(), cluster_id) {
             self.clusters.insert(cluster.clone(), old_cluster_id);
             cluster_id = old_cluster_id;
         } else { //cluster was not inserted jet
-            self.cluster_vector.push((cluster, cluster_id));
+            self.cluster_vector.push(cluster);
         }
         cluster_id
     }
@@ -408,7 +412,7 @@ impl TopTreeBuilder {
             self.labels.insert(name.clone(), old_label);
             label_id = old_label;
         } else { //label was not inserted jet
-            self.label_vector.push((name.to_string(), label_id));
+            self.label_vector.push(name.to_string());
         }
         label_id
     }
@@ -525,19 +529,180 @@ impl TopTreeBuilder {
 
         writeln!(output, "Number of Edges in the IO Tree {}", self.edges.len() - 1)?;
 
-        let mut number_of_leafs = 0;
-        let mut number_of_nodes = 0;
-        for (cluster_id, _number) in self.clusters.clone() {
-            match cluster_id {
-                ClusterID::Cluster {..} => {number_of_nodes += 1},
-                ClusterID::Leaf {..} => {number_of_leafs += 1},
-            }
-        }
+        let number_of_leafs = self.label_vector.len();
+        let number_of_nodes = self.cluster_vector.len();
 
         writeln!(output, "Number of leafs in the TopDAG {}", number_of_leafs)?;
         writeln!(output, "Number of nodes in the TopDAG {}", number_of_nodes)?;
 
         write!(f,"{}", output)
+    }
+
+    pub fn traverse(&self) -> (Vec<bool>, Vec<usize>, Vec<usize>, Vec<String>) { //TODO remove the pub
+        let mut structure = Vec::new();
+        let mut merge_types = Vec::new();
+        let lable = self.label_vector.clone();
+
+        let mut cluster_pointer: Vec<Uninitialized<usize>> = vec![Uninitialized::new(); self.cluster_vector.len()];
+        let mut pointer: Vec<Uninitialized<usize>> = vec![Uninitialized::new(); self.cluster_vector.len()*2];
+
+        //(current index, first occurrence)
+        let mut work_stack = vec![(self.cluster_vector.len() - 1, true, 0)];
+        let mut current_traverse_index: usize = 0;
+
+        //current_index is the true index in the cluster vector
+        while let Some((current_index, first_occurrence, own_traverse_index)) = work_stack.pop() {
+            let Cluster{ merge_type, first_child, second_child } = &self.cluster_vector[current_index];
+
+            if first_occurrence {
+                //increase the traverse index one time for each true cluster
+                current_traverse_index += 1;
+
+                //push us on the stack again
+                work_stack.push((current_index, false, own_traverse_index));
+
+                //push the merge type
+                merge_types.push(merge_type.get_usize());
+
+                //first child
+                if *first_child < self.label_vector.len() {
+                    //it is a leaf
+                    structure.push(false);
+                    pointer[own_traverse_index*2].set_value(*first_child);
+                } else if cluster_pointer[first_child - self.label_vector.len()].is_initialized() {
+                    //we already have this cluster
+                    structure.push(false);
+                    pointer[own_traverse_index*2].set_value(*cluster_pointer[first_child - self.label_vector.len()]);
+                } else {
+                    //it is a true cluster
+                    structure.push(true);
+                    work_stack.push((first_child - self.label_vector.len(), true, current_traverse_index));
+                }
+
+                //we need to push a dummy value
+                structure.push(false);
+            } else {
+                //second child
+                if *second_child < self.label_vector.len() {
+                    //it is a leaf
+                    structure[own_traverse_index*2 + 1] = false; //should already be false
+                    pointer[own_traverse_index*2 + 1].set_value(*second_child);
+                } else if cluster_pointer[second_child - self.label_vector.len()].is_initialized() {
+                    //we already have this cluster
+                    structure[own_traverse_index*2 + 1] = false; //should already be false
+                    pointer[own_traverse_index*2 + 1].set_value(*cluster_pointer[second_child - self.label_vector.len()]);
+                } else {
+                    //it is a true cluster
+                    structure[own_traverse_index*2 + 1] = true;
+                    work_stack.push((second_child - self.label_vector.len(), true, current_traverse_index));
+                }
+
+                //we have finished this cluster so we mark it as finished
+                //we set the pointer to the number of clusters we already have plus the offset for the labels
+                cluster_pointer[current_index].set_value(own_traverse_index + self.label_vector.len());
+            }
+        }
+        let pointer = pointer.iter().filter_map(|elem| elem.clone().try_into_inner()).collect();
+        (structure, pointer, merge_types, lable)
+    }
+
+    pub fn detraverse(&mut self, structure: Vec<bool>, pointer: Vec<usize>, merge_types: Vec<usize>, labels: Vec<String>) { //TODO remove the pub
+        //build label Hash Map
+        for (index, label) in labels.iter().enumerate() {
+            self.labels.insert(label.clone(), index);
+        }
+
+        //clear data if we have some
+        self.label_vector = labels;
+        self.labels.clear();
+        self.cluster_vector.clear();
+        self.clusters.clear();
+
+        //build index Hash Map
+        //the traversal index is not the index in the cluster vector so this maps the traversal index to the cluster index
+        let mut traversal_index_to_cluster_index = HashMap::new();
+
+        //build rank Hash Map //TODO maybe replace this by sdsl
+        let mut rank = HashMap::new();
+        let mut number_of_zeros: usize = 0;
+        for (index, bit) in structure.iter().enumerate() {
+            if !bit {
+                rank.insert(index, number_of_zeros);
+                number_of_zeros += 1;
+            }
+        }
+
+        let mut global_index = 0;
+        let mut return_value = 0;
+        //(index, merge_type, first_child)
+        let mut workstack: Vec<(usize, Uninitialized<MergeType>, Uninitialized<usize>)> = vec![(0, Uninitialized::new(), Uninitialized::new())];
+
+
+        while let Some((index, mut merge_type, mut first_child)) = workstack.pop() {
+            if merge_type.is_uninitialized() {
+                //first encounter of this cluster prototype
+                merge_type.set_value(MergeType::from_usize(merge_types[index]));
+                if structure[index*2] {
+                    //push self on stack
+                    workstack.push((index, merge_type, first_child));
+
+                    //first child is a true cluster so we push it on the stack
+                    global_index += 1;
+                    workstack.push((global_index, Uninitialized::new(), Uninitialized::new()));
+                } else {
+                    return_value = if pointer[*rank.get(&(index*2)).unwrap()] < self.label_vector.len() {
+                        //we have a leaf
+                        pointer[*rank.get(&(index*2)).unwrap()]
+                    } else {
+                        //we have a cluster copy
+                        *traversal_index_to_cluster_index.get(&(pointer[*rank.get(&(index*2)).unwrap()] - self.label_vector.len())).unwrap()
+                    };
+
+                    //push self on stack
+                    workstack.push((index, merge_type, first_child));
+                    //first child is either a leaf or a copy of a already known cluster so we do not need to push it
+                }
+
+            } else if first_child.is_uninitialized() {
+                //second encounter of this cluster prototype
+                first_child.set_value(return_value);
+
+                if structure[index*2 + 1] {
+                    //push self on stack
+                    workstack.push((index, merge_type, first_child));
+
+                    //second child is a true cluster so we push it on the stack
+                    global_index += 1;
+                    workstack.push((global_index, Uninitialized::new(), Uninitialized::new()));
+                } else {
+                    //second child is either a leaf or a copy of a already known cluster so we do not need to push it
+                    let second_child = if pointer[*rank.get(&(index*2 + 1)).unwrap()] < self.label_vector.len() {
+                        //we have a leaf
+                        pointer[*rank.get(&(index*2 + 1)).unwrap()]
+                    } else {
+                        //we have a cluster copy
+                        *traversal_index_to_cluster_index.get(&(pointer[*rank.get(&(index*2 + 1)).unwrap()] - self.label_vector.len())).unwrap()
+                    };
+                    //build a new cluster and push it to vector and hash map
+                    let cluster = Cluster { merge_type: merge_type.clone().into_inner(), first_child: *first_child, second_child};
+                    let cluster_index = self.cluster_vector.len() + self.label_vector.len();
+                    self.clusters.insert(cluster.clone(), cluster_index);
+                    self.cluster_vector.push(cluster);
+                    traversal_index_to_cluster_index.insert(index, cluster_index);
+                    return_value = cluster_index;
+                }
+            } else {
+                //third and last encounter of this cluster prototype
+                let second_child = return_value;
+                //build a new cluster and push it to vector and hash map
+                let cluster = Cluster { merge_type: merge_type.clone().into_inner(), first_child: *first_child, second_child};
+                let cluster_index = self.cluster_vector.len() + self.label_vector.len();
+                self.clusters.insert(cluster.clone(), cluster_index);
+                self.cluster_vector.push(cluster);
+                traversal_index_to_cluster_index.insert(index, cluster_index);
+                return_value = cluster_index;
+            }
+        }
     }
 }
 

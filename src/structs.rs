@@ -1,4 +1,4 @@
-//use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut};
 use std::error::Error;
 use std::fmt::{Result, Formatter, Display};
 
@@ -24,20 +24,13 @@ pub enum Child {
 }
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
-pub enum ClusterID {
-    Leaf {
-        ///The label identifier
-        label: usize
-    },
-
-    Cluster {
-        ///The merge type
-        merge_type: MergeType,
-        ///The cluster identifier
-        first_child: usize,
-        ///The cluster identifier
-        second_child: usize,
-    },
+pub struct Cluster {
+    ///The merge type
+    pub merge_type: MergeType,
+    ///The cluster identifier
+    pub first_child: usize,
+    ///The cluster identifier
+    pub second_child: usize,
 }
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
@@ -47,6 +40,25 @@ pub enum MergeType {
     C,
 
     DE,
+}
+
+impl MergeType {
+    pub fn from_usize(integer: usize) -> Self {
+        match integer {
+            0 => MergeType::AB,
+            1 => MergeType::C,
+            _ => MergeType::DE,
+        }
+    }
+
+    pub fn get_usize(&self) -> usize {
+        use MergeType::{AB,C,DE};
+        match self {
+            AB => 0,
+            C => 1,
+            DE => 2,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -95,23 +107,31 @@ impl Default for Edge {
 }
 
 
-/*
-pub struct SaveOption<T> {
+#[derive(Eq, PartialEq, Clone, Debug)]
+pub struct Uninitialized<T> {
     pub value: Option<T>,
 }
 
-impl<T> SaveOption<T> {
-    pub fn new() -> SaveOption<T> {
-        SaveOption {
+impl<T> Uninitialized<T> {
+    pub fn new() -> Uninitialized<T> {
+        Uninitialized {
             value: None,
         }
+    }
+
+    pub fn into_inner(mut self) -> T {
+        self.value.take().unwrap()
+    }
+
+    pub fn try_into_inner(mut self) -> Option<T> {
+        self.value.take()
     }
 
     pub fn set_value(&mut self, new_value: T) {
         self.value = Some(new_value);
     }
 
-    pub fn swap_value(&mut self, new_value: T) -> T {
+    /*pub fn swap_value(&mut self, new_value: T) -> T {
         let to_return;
         if let Some(data) = self.value.take() {
             to_return = data;
@@ -120,35 +140,39 @@ impl<T> SaveOption<T> {
         }
         self.value = Some(new_value);
         to_return
+    }*/
+
+    pub fn is_initialized(&self) -> bool {
+        self.value.is_some()
     }
 
-    pub fn is_set(&self) -> bool {
-        self.value.is_some()
+    pub fn is_uninitialized(&self) -> bool {
+        self.value.is_none()
     }
 }
 
-impl<T> Deref for SaveOption<T> {
+impl<T> Deref for Uninitialized<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
         if let Some(ref data) = self.value {
             data
         } else {
-            panic!("Error: Called derefMut on a SaveOption before feeding it any value");
+            panic!("Error: Use of a not initialized value");
         }
     }
 }
 
-impl<T> DerefMut for SaveOption<T> {
+impl<T> DerefMut for Uninitialized<T> {
     fn deref_mut(&mut self) -> &mut T {
         if let Some(ref mut data) = self.value {
             data
         } else {
-            panic!("Error: Called deref_mut on a SaveOption before feeding it any value");
+            panic!("Error: Use of a not initialized value");
         }
     }
 }
-*/
+
 
 
 #[derive(Debug)]
