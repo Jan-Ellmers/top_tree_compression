@@ -1,28 +1,28 @@
+#![feature(extern_prelude)]
 extern crate quick_xml;
-
-use quick_xml::Reader;
-use quick_xml::events::Event;
 
 #[macro_use]
 mod macros;
 mod structs;
+pub mod io_tree;
+pub mod flags_and_statistic;
+mod uninitialized;
 
-use structs::{Node, Leaf, Edge, Cluster, ParseError, Child, NodeHandle, MergeType, Data, Uninitialized};
+use structs::{Node, Leaf, Edge, Cluster, Child, NodeHandle, MergeType, Data};
+use io_tree::{IO_Tree, GenResult};
+use flags_and_statistic::{Statistic, Flags, MergeRule};
+use uninitialized::Uninitialized;
 
 
 use std::collections::{HashMap, VecDeque};
-use std::fs::File;
-use std::error::Error;
-use std::io::BufReader;
-use std::fmt::{Debug, Formatter, Result, Write, Display};
-use std::time::{Instant, Duration};
+use std::fmt::{Debug, Formatter, Result, Write};
+use std::time::Instant;
 use std::str::FromStr;
 
 
-type GenError = Box<Error>;
-type GenResult<T> = std::result::Result<T, GenError>;
 
 const DUMMY_NODE_LABEL: &str = "Dummy_node";
+const MAGIC_SLOWING_DOWN_NUMBER: f64 = 10.0 / 9.0;
 
 pub struct TopTreeBuilder {
     nodes: Vec<Node>,
@@ -34,96 +34,133 @@ pub struct TopTreeBuilder {
     labels: HashMap<String, usize>,
 
     cluster_vector: Vec<Cluster>,
+    cluster_size: Vec<usize>,
     label_vector: Vec<String>,
+
+    flags: Flags,
+    statistic: Statistic,
+
+    number_of_steps: usize,
 }
 
 impl TopTreeBuilder {
-    pub fn new_from_xml(path: &str) -> GenResult<TopTreeBuilder> {
-        let root = measure_performance!(IO_Tree::new_from_xml(path)?, "Converting the XML to the IO tree toke:");
-
-        Ok(TopTreeBuilder::new_from_IO_tree(root))
-    }
-
-    #[allow(non_snake_case)]
-    pub fn new_from_IO_tree(tree: IO_Tree) -> TopTreeBuilder {
+    pub fn new_from_xml(path: &str, flags: Option<Flags>) -> GenResult<TopTreeBuilder> {
         let mut builder = TopTreeBuilder {
-            nodes: Vec::with_capacity(4_000_000),
-            leafs: Vec::with_capacity(4_000_000),
-            edges: Vec::with_capacity(4_000_000),
+            nodes: Vec::with_capacity(40_000_000),
+            leafs: Vec::with_capacity(40_000_000),
+            edges: Vec::with_capacity(40_000_000),
 
 
             clusters: HashMap::new(),
             labels: HashMap::new(),
 
             cluster_vector: Vec::new(),
+            cluster_size: Vec::new(),
             label_vector: Vec::new(),
+
+            flags: flags.unwrap_or_default(),
+            statistic: Statistic::new(),
+
+            number_of_steps: 0,
         };
 
-        //insert the dummy label
-        let dummy_label_id = builder.insert_label(&DUMMY_NODE_LABEL.to_owned());
-        builder.nodes.push(Node::new(dummy_label_id));
+        let root = measure_performance!(IO_Tree::new_from_xml(path)?, builder.statistic.time_for_xml_parsing);
 
-        //insert a place holder child
-        builder.edges.push(Edge::default());
+        builder.build_from_IO_tree(root);
 
-        //insert the root
-        let root_label_id = builder.insert_label(&tree.label);
-        let child = if tree.children.len() == 0 {
-            Child::Leaf(Leaf {deleted: false, data: Data::Label(root_label_id)})
-        } else {
-            Child::Node(Node::new(root_label_id), Some(tree.children.len()))
+        Ok(builder)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn new_from_IO_tree (tree: IO_Tree, flags: Option<Flags>) -> TopTreeBuilder {
+        let mut builder = TopTreeBuilder {
+            nodes: Vec::with_capacity(40_000_000),
+            leafs: Vec::with_capacity(40_000_000),
+            edges: Vec::with_capacity(40_000_000),
+
+
+            clusters: HashMap::new(),
+            labels: HashMap::new(),
+
+            cluster_vector: Vec::new(),
+            cluster_size: Vec::new(),
+            label_vector: Vec::new(),
+
+            flags: flags.unwrap_or_default(),
+            statistic: Statistic::new(),
+
+            number_of_steps: 0,
         };
-        let root_addr = builder.push_child(0, child);
 
-        //insert the tree
-        measure_performance!(builder.rec_insert_tree(root_addr, tree), "Parsing the IO tree toke:");
-
-        //build the TopDag
-        let mut step_1_time = Duration::new(0, 0);
-        let mut step_2_time = Duration::new(0, 0);
-
-        let mut number_of_steps = 0;
-
-        while !builder.finished() {
-            if cfg!(feature = "performance_test") {
-                number_of_steps += 1;
-                let mut time_stamp = Instant::now();
-
-                builder.step_1();
-
-                let first_timestamp = time_stamp.elapsed();
-                debug!("Step 1 finished\n{:?}", builder);
-                time_stamp = Instant::now();
-
-                builder.step_2();
-
-                let second_timestamp = time_stamp.elapsed();
-                debug!("Step 2 finished\n{:?}", builder);
-                step_1_time += first_timestamp;
-                step_2_time += second_timestamp;
-                println!("Step 1 toke: {:?}, Step 2 toke: {:?}", first_timestamp, second_timestamp);
-            } else {
-                builder.step_1();
-                debug!("Step 1 finished\n{:?}", builder);
-                builder.step_2();
-                debug!("Step 2 finished\n{:?}", builder);
-            }
-        }
-        if cfg!(feature = "performance_test") {
-            println!("\nStep 1 overall toke: {:?}, Step 2 overall toke: {:?}", step_1_time, step_2_time);
-            println!("\nBuilding the DAG overall toke {:?} and {} rounds", step_1_time + step_2_time, number_of_steps);
-        }
-
-        //clear the unneeded vectors
-        //builder.nodes.clear();
-        //builder.leafs.clear();
-        //builder.edges.clear();
+        builder.build_from_IO_tree(tree);
 
         builder
     }
 
     #[allow(non_snake_case)]
-    pub fn into_IO_tree(self) -> IO_Tree {
+    pub fn build_from_IO_tree(&mut self, tree: IO_Tree) {
+        //insert the dummy label
+        let dummy_label_id = self.insert_label(&DUMMY_NODE_LABEL.to_owned());
+        self.nodes.push(Node::new(dummy_label_id));
+
+        //insert a place holder child
+        self.edges.push(Edge::default());
+
+        //insert the root
+        let root_label_id = self.insert_label(&tree.label);
+        let child = if tree.children.len() == 0 {
+            Child::Leaf(Leaf {deleted: false, data: Data::Label(root_label_id)})
+        } else {
+            Child::Node(Node::new(root_label_id), Some(tree.children.len()))
+        };
+        let root_addr = self.push_child(0, child);
+
+        //insert the tree
+        measure_performance!(self.rec_insert_tree(root_addr, tree), self.statistic.time_for_io_tree_parsing);
+
+        //build the TopDag
+        //stop if dummy has only a leaf as child
+        while self.edges[self.nodes[0].first_child].index < usize::max_value() >> 1 {
+            if cfg!(feature = "performance_test") {
+                self.number_of_steps += 1;
+                let mut time_stamp = Instant::now();
+
+                self.horizontal_merge();
+
+                let first_timestamp = time_stamp.elapsed();
+                debug!("Horizontal merge finished\n{:?}", self);
+                time_stamp = Instant::now();
+
+                self.vertical_merge();
+
+                let second_timestamp = time_stamp.elapsed();
+                debug!("Vertical merge finished\n{:?}", self);
+                self.statistic.timestamps_vector.push((first_timestamp, second_timestamp));
+            } else {
+                self.number_of_steps += 1;
+                self.horizontal_merge();
+                debug!("Horizontal merge finished\n{:?}", self);
+                self.vertical_merge();
+                debug!("Vertical merge finished\n{:?}", self);
+            }
+        }
+        //make statistic
+        self.statistic.number_of_merge_rounds = self.number_of_steps;
+        self.statistic.number_of_nodes_in_io_tree = self.nodes.len();
+        self.statistic.number_of_leafs_in_io_tree = self.leafs.len();
+        self.statistic.number_of_edges_in_io_tree = self.edges.len();
+
+        self.statistic.number_of_leafs_in_top_dag = self.label_vector.len() - 1; //exclude the dummy lable
+        self.statistic.number_of_nodes_in_top_dag = self.cluster_vector.len();
+
+        //clear the unneeded vectors
+        self.nodes.clear();
+        self.leafs.clear();
+        self.edges.clear();
+    }
+
+    #[allow(non_snake_case)]
+    pub fn get_IO_tree(&mut self) -> IO_Tree {
         let mut dummy_node = IO_Tree {
             label: DUMMY_NODE_LABEL.to_owned(),
             children: VecDeque::new(),
@@ -134,14 +171,18 @@ impl TopTreeBuilder {
             children: VecDeque::new(),
         });
 
-        measure_performance!(self.rec_into_IO_tree(&mut dummy_node, 0), "Decompression of the TopDag toke:");
+        measure_performance!(self.rec_get_IO_tree(&mut dummy_node, 0), self.statistic.time_for_decompression);
 
         assert!(dummy_node.children.len() == 1);
         dummy_node.children.pop_back().unwrap()
     }
 
+    pub fn get_statistic(&self) -> &Statistic {
+        &self.statistic
+    }
+
     #[allow(non_snake_case)]
-    fn rec_into_IO_tree(&self, parent: &mut IO_Tree, index: usize) {
+    fn rec_get_IO_tree(&self, parent: &mut IO_Tree, index: usize) {
         if let Ok(mut cluster_index) = usize::from_str(&parent.children[index].label) {
             if cluster_index < self.label_vector.len() {
                 //we have a leaf
@@ -171,9 +212,9 @@ impl TopTreeBuilder {
                         parent.children[index].children.push_back(second_cluster);
 
                         //rec call on both nodes
-                        self.rec_into_IO_tree(&mut parent.children[index], 0);
+                        self.rec_get_IO_tree(&mut parent.children[index], 0);
 
-                        self.rec_into_IO_tree(parent, index);
+                        self.rec_get_IO_tree(parent, index);
                     },
 
                     Cluster {merge_type: MergeType::C, first_child, second_child} => {
@@ -185,9 +226,9 @@ impl TopTreeBuilder {
                         });
 
                         //rec call on both nodes
-                        self.rec_into_IO_tree(parent, index + 1);
+                        self.rec_get_IO_tree(parent, index + 1);
 
-                        self.rec_into_IO_tree(parent, index);
+                        self.rec_get_IO_tree(parent, index);
                     },
 
                     Cluster {merge_type: MergeType::DE, first_child, second_child} => {
@@ -199,9 +240,9 @@ impl TopTreeBuilder {
                         });
 
                         //rec call on both nodes
-                        self.rec_into_IO_tree(parent, index + 1);
+                        self.rec_get_IO_tree(parent, index + 1);
 
-                        self.rec_into_IO_tree(parent, index);
+                        self.rec_get_IO_tree(parent, index);
                     },
                 }
             }
@@ -210,25 +251,24 @@ impl TopTreeBuilder {
         } else {panic!("Error: Database is corrupt")}
     }
 
-    /// computes if we have finished the TopDag building
-    fn finished(&self) -> bool {
-        //if the dummy node has only one child and that child is a leaf
-        //but dummy node always must have one child
-        self.edges[self.nodes[0].first_child].index >= usize::max_value() >> 1
-    }
-
-    fn step_1(&mut self) {
+    fn horizontal_merge(&mut self) {
+        use MergeRule::SimplifiedStandardRules;
         let mut index = 0;
         while index < self.nodes.len() {
             //check if node is not deleted
             if !self.nodes[index].deleted {
-                self.step_1_subroutine(index);
+                match self.flags.merge_rule {
+                    SimplifiedStandardRules => {
+                        self.ssr_horizontal_merge(index);
+                    },
+                }
             }
             index += 1;
         }
     }
 
-    fn step_1_subroutine(&mut self, parent: usize) {
+    ///simplified_standard_rules
+    fn ssr_horizontal_merge(&mut self, parent: usize) {
         //assert all nodes between first and last child are not deleted
         let mut index = self.nodes[parent].first_child;
         while index + 1 < self.nodes[parent].last_child {
@@ -250,7 +290,7 @@ impl TopTreeBuilder {
         self.compress_children(parent);
     }
 
-    fn step_2(&mut self) {
+    fn vertical_merge(&mut self) {
         let mut index = 0;
         while index < self.nodes.len() {
             //check if node is not deleted
@@ -258,7 +298,7 @@ impl TopTreeBuilder {
                 if self.nodes[index].first_child + 1 < self.nodes[index].last_child || index == 0 {//node has more than one child or is the dummy node
                     let mut child_index = self.nodes[index].first_child;
                     while child_index < self.nodes[index].last_child {
-                        self.step_2_subroutine(NodeHandle { parent: index, child: child_index});
+                        self.ssr_vertical_merge(NodeHandle { parent: index, child: child_index});
                         child_index += 1;
                     }
                 }
@@ -267,7 +307,8 @@ impl TopTreeBuilder {
         }
     }
 
-    fn step_2_subroutine(&mut self, mut first_cluster: NodeHandle) {
+    ///simplified_standard_rules
+    fn ssr_vertical_merge(&mut self, mut first_cluster: NodeHandle) {
         loop {
             let second_cluster;
             {//check if second_cluster is valid
@@ -298,9 +339,17 @@ impl TopTreeBuilder {
         let second_node = self.edges[second_cluster.child].index;
         let cluster = Cluster {
             merge_type: merge_type.clone(),
-            first_child: self.get_cluster_id_from_node(first_node),
-            second_child: self.get_cluster_id_from_node(second_node),
+            first_child: self.get_cluster_index(first_node),
+            second_child: self.get_cluster_index(second_node),
         };
+        //check for slowing down
+        if self.flags.slowing_down {
+            if  cluster.first_child > MAGIC_SLOWING_DOWN_NUMBER.powf(self.number_of_steps as f64) as usize
+             || cluster.second_child > MAGIC_SLOWING_DOWN_NUMBER.powf(self.number_of_steps as f64) as usize {
+                return;
+            }
+        }
+
         let cluster_id = self.add_cluster(cluster);
 
         match merge_type {
@@ -354,10 +403,10 @@ impl TopTreeBuilder {
         }
     }
 
-    /// builds a cluster from the child
-    /// child must be an index from the edge array
-    /// returns the usize identifier from the child
-    fn get_cluster_id_from_node(&mut self, node: usize) -> usize {
+    /// builds a cluster from the node
+    /// node must be an index from the node array
+    /// returns the index of the cluster of the node
+    fn get_cluster_index(&mut self, node: usize) -> usize {
         let node_data = if node < usize::max_value() >> 1 {
             //child is a node
             self.nodes[node].data.clone()
@@ -383,6 +432,21 @@ impl TopTreeBuilder {
             self.clusters.insert(cluster.clone(), old_cluster_id);
             cluster_id = old_cluster_id;
         } else { //cluster was not inserted jet
+            let mut size = 1;
+            if cluster.first_child < self.label_vector.len() {
+                size += 1;
+            } else {
+                size += self.cluster_size[cluster.first_child - self.label_vector.len()];
+            }
+
+            if cluster.second_child < self.label_vector.len() {
+                size += 1;
+            } else {
+                size += self.cluster_size[cluster.second_child - self.label_vector.len()];
+            }
+
+            self.cluster_size.push(size);
+
             self.cluster_vector.push(cluster);
         }
         cluster_id
@@ -516,26 +580,6 @@ impl TopTreeBuilder {
 
         //adjust last child
         self.nodes[parent].last_child = backward_index;
-    }
-
-    fn display_subroutine(&self, f: &mut Formatter) -> Result {
-        let mut output = String::new();
-
-        writeln!(output, "Number of unique labels {}", self.labels.len() - 1)?;
-
-        writeln!(output, "Number of nodes in the IO Tree {}", self.nodes.len() - 1)?;
-
-        writeln!(output, "Number of Leafs in the IO Tree {}", self.leafs.len())?;
-
-        writeln!(output, "Number of Edges in the IO Tree {}", self.edges.len() - 1)?;
-
-        let number_of_leafs = self.label_vector.len();
-        let number_of_nodes = self.cluster_vector.len();
-
-        writeln!(output, "Number of leafs in the TopDAG {}", number_of_leafs)?;
-        writeln!(output, "Number of nodes in the TopDAG {}", number_of_nodes)?;
-
-        write!(f,"{}", output)
     }
 
     pub fn traverse(&self) -> (Vec<bool>, Vec<usize>, Vec<usize>, Vec<String>) { //TODO remove the pub
@@ -685,9 +729,7 @@ impl TopTreeBuilder {
                     };
                     //build a new cluster and push it to vector and hash map
                     let cluster = Cluster { merge_type: merge_type.clone().into_inner(), first_child: *first_child, second_child};
-                    let cluster_index = self.cluster_vector.len() + self.label_vector.len();
-                    self.clusters.insert(cluster.clone(), cluster_index);
-                    self.cluster_vector.push(cluster);
+                    let cluster_index = self.add_cluster(cluster);
                     traversal_index_to_cluster_index.insert(index, cluster_index);
                     return_value = cluster_index;
                 }
@@ -696,9 +738,7 @@ impl TopTreeBuilder {
                 let second_child = return_value;
                 //build a new cluster and push it to vector and hash map
                 let cluster = Cluster { merge_type: merge_type.clone().into_inner(), first_child: *first_child, second_child};
-                let cluster_index = self.cluster_vector.len() + self.label_vector.len();
-                self.clusters.insert(cluster.clone(), cluster_index);
-                self.cluster_vector.push(cluster);
+                let cluster_index = self.add_cluster(cluster);
                 traversal_index_to_cluster_index.insert(index, cluster_index);
                 return_value = cluster_index;
             }
@@ -746,83 +786,10 @@ impl Debug for TopTreeBuilder {
             clusters.push(cluster);
         }
         clusters.sort_by_key(|value| {value.1});
-        for cluster in clusters {
-            write!(output, "{:?} \n", cluster)?;
+        for (index, cluster) in clusters.iter().enumerate() {
+            write!(output, "{:?} size: {} \n", cluster, self.cluster_size[index])?;
         }
 
         write!(f, "Debug info: \n{}", output)
-    }
-}
-
-impl Display for TopTreeBuilder {
-    fn fmt(&self, f: &mut Formatter) -> Result {
-        measure_performance!(self.display_subroutine(f), "Calculating the statistics toke:")
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(non_camel_case_types)]
-pub struct IO_Tree {
-    pub label: String,
-    pub children: VecDeque<IO_Tree>,
-}
-
-impl IO_Tree {
-    pub fn new_from_xml (path: &str) -> GenResult<IO_Tree> {
-        let file = File::open(path)?;
-        let mut reader = Reader::from_reader(BufReader::new(file));
-
-        let mut buf = Vec::new();
-
-        let mut node_stack = Vec::new();
-
-        'filereader: loop {
-            match reader.read_event(&mut buf) {
-                Ok(Event::Start(ref elem)) => {
-                    let label = String::from_utf8_lossy(elem.name()).to_string();
-
-                    node_stack.push(IO_Tree {
-                        label,
-                        children: VecDeque::new(),
-                    });
-                },
-
-                Ok(Event::End(ref elem)) => {
-                    let label = String::from_utf8_lossy(elem.name()).to_string();
-                    if let Some(node) = node_stack.pop() {
-                        if node.label != label {return Err(Box::new(ParseError::CannotParse));}
-                        if let Some(last) = node_stack.len().checked_sub(1) {
-                            //node is not root so we push it to its parent
-                            node_stack[last].children.push_back(node);
-                        } else { //push the root back on the stack
-                            node_stack.push(node);
-                        }
-                    } else {
-                        return Err(Box::new(ParseError::CannotParse));
-                    }
-                },
-
-                Ok(Event::Eof) => break 'filereader, // exits the loop when reaching end of file
-
-                Err(_) => {
-                    return Err(Box::new(ParseError::CannotParse))
-                },
-
-                _ => (), // There are several other `Event`s we do not consider here
-            }
-
-            // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
-            buf.clear();
-        }
-
-        if let Some(root) = node_stack.pop() {
-            if node_stack.is_empty() {
-                Ok(root)
-            } else {
-                Err(Box::new(ParseError::CannotParse))
-            }
-        } else {
-            Err(Box::new(ParseError::CannotParse))
-        }
     }
 }
