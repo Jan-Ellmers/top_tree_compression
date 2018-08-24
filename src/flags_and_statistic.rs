@@ -19,6 +19,8 @@ impl Default for Flags {
 
 pub enum MergeRule {
     SimplifiedStandardRules,
+
+    FastAdvancedRules,
 }
 
 pub struct Statistic {
