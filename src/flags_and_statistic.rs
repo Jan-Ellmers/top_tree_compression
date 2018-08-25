@@ -21,6 +21,8 @@ pub enum MergeRule {
     SimplifiedStandardRules,
 
     FastAdvancedRules,
+
+    SlowAdvancedRules,
 }
 
 pub struct Statistic {
