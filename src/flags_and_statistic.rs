@@ -5,14 +5,15 @@ use std::fmt::{Formatter, Result, Display};
 
 pub struct Flags {
     pub merge_rule: MergeRule,
-    pub slowing_down: bool,
+    pub slowing_down: f64,
 }
 
 impl Default for Flags {
     fn default() -> Self {
         Flags {
             merge_rule: MergeRule::SimplifiedStandardRules,
-            slowing_down: false,
+            //4 is the minimum so it has no effect
+            slowing_down: 4.0,
         }
     }
 }

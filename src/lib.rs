@@ -22,7 +22,6 @@ use std::str::FromStr;
 
 
 const DUMMY_NODE_LABEL: &str = "Dummy_node";
-const MAGIC_SLOWING_DOWN_NUMBER: f64 = 10.0 / 9.0;
 
 pub struct TopTreeBuilder {
     nodes: Vec<Node>,
@@ -617,12 +616,11 @@ impl TopTreeBuilder {
             second_child: self.get_cluster_index(second_node),
         };
         //check for slowing down
-        if self.flags.slowing_down {
-            if  cluster.first_child > MAGIC_SLOWING_DOWN_NUMBER.powf(self.number_of_steps as f64) as usize
-             || cluster.second_child > MAGIC_SLOWING_DOWN_NUMBER.powf(self.number_of_steps as f64) as usize {
-                return;
-            }
+        if      cluster.first_child as f64 > self.flags.slowing_down.powf(self.number_of_steps as f64)
+             || cluster.second_child as f64 > self.flags.slowing_down.powf(self.number_of_steps as f64) {
+            return;
         }
+
         let cluster_id = self.add_cluster(cluster);
 
         match merge_type {
