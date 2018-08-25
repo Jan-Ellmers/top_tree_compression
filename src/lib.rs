@@ -217,7 +217,7 @@ impl TopTreeBuilder {
                         self.rec_get_IO_tree(parent, index);
                     },
 
-                    Cluster {merge_type: MergeType::C, first_child, second_child} => {
+                    Cluster {merge_type: MergeType::CE, first_child, second_child} => {
                         parent.children[index].label = first_child.to_string();
 
                         parent.children.insert(index + 1, IO_Tree {
@@ -289,7 +289,7 @@ impl TopTreeBuilder {
             if first_is_leaf { //merge type D or E
                 self.merge(first_cluster, second_cluster, MergeType::DE);
             } else if second_is_leaf { //merge type C
-                self.merge(first_cluster, second_cluster, MergeType::C);
+                self.merge(first_cluster, second_cluster, MergeType::CE);
             } //else no merge possible
 
             index +=2;
@@ -318,11 +318,20 @@ impl TopTreeBuilder {
                     index += 2;
                     continue;
                 }
+
+                /*if self.edges[index + 1].index >= usize::max_value() >> 1 { //had bad results in practice
+                    //type E so we try to merge it with CE
+                    if self.try_merge(first_cluster.clone(), second_cluster.clone(), MergeType::CE) {
+                        self.merge(first_cluster, second_cluster, MergeType::CE);
+                        index += 2;
+                        continue;
+                    }
+                }*/
             } else if self.edges[index + 1].index >= usize::max_value() >> 1 {
                 //type C
-                could_merge = Some(MergeType::C);
-                if self.try_merge(first_cluster.clone(), second_cluster.clone(), MergeType::C) {
-                    self.merge(first_cluster, second_cluster, MergeType::C);
+                could_merge = Some(MergeType::CE);
+                if self.try_merge(first_cluster.clone(), second_cluster.clone(), MergeType::CE) {
+                    self.merge(first_cluster, second_cluster, MergeType::CE);
                     index += 2;
                     continue;
                 }
@@ -349,8 +358,8 @@ impl TopTreeBuilder {
                 }
             } else if self.edges[index + 2].index >= usize::max_value() >> 1 {
                 //type C
-                if self.try_merge(second_cluster.clone(), third_cluster.clone(), MergeType::C) {
-                    self.merge(second_cluster, third_cluster, MergeType::C);
+                if self.try_merge(second_cluster.clone(), third_cluster.clone(), MergeType::CE) {
+                    self.merge(second_cluster, third_cluster, MergeType::CE);
                     index += 3;
                     continue;
                 }
@@ -388,8 +397,8 @@ impl TopTreeBuilder {
                     }
                 } else if self.edges[index + 1].index >= usize::max_value() >> 1 {
                     //type C
-                    if self.try_merge(first_cluster.clone(), second_cluster.clone(), MergeType::C) {
-                        self.merge(first_cluster, second_cluster, MergeType::C);
+                    if self.try_merge(first_cluster.clone(), second_cluster.clone(), MergeType::CE) {
+                        self.merge(first_cluster, second_cluster, MergeType::CE);
                         index += 2;
                         continue;
                     }
@@ -411,8 +420,8 @@ impl TopTreeBuilder {
                     }
                 } else if self.edges[index + 2].index >= usize::max_value() >> 1 {
                     //type C
-                    if self.try_merge(second_cluster.clone(), third_cluster.clone(), MergeType::C) {
-                        self.merge(second_cluster, third_cluster, MergeType::C);
+                    if self.try_merge(second_cluster.clone(), third_cluster.clone(), MergeType::CE) {
+                        self.merge(second_cluster, third_cluster, MergeType::CE);
                         index += 3;
                         continue;
                     }
@@ -598,7 +607,7 @@ impl TopTreeBuilder {
 
     fn merge(&mut self, first_cluster: NodeHandle, second_cluster: NodeHandle, merge_type: MergeType) {
         assert!(first_cluster.parent != second_cluster.parent || merge_type != MergeType::AB);
-        use MergeType::{AB,C,DE};
+        use MergeType::{AB,CE,DE};
         //get the id of the new cluster
         let first_node = self.edges[first_cluster.child].index;
         let second_node = self.edges[second_cluster.child].index;
@@ -636,11 +645,16 @@ impl TopTreeBuilder {
                 self.nodes[second_cluster.parent].deleted = true;
             },
 
-            C => {
+            CE => {
                 //change the data on the first_cluster_child
                 let cluster_child_index = self.edges[first_cluster.child].index;
-                //child is a node because we have a C merge
-                self.nodes[cluster_child_index].data = Data::Cluster(cluster_id);
+                if cluster_child_index < usize::max_value() >> 1 {
+                    //child is a node so we have a C merge
+                    self.nodes[cluster_child_index].data = Data::Cluster(cluster_id);
+                } else {
+                    //child is a leaf so we have a E merge
+                    self.leafs[cluster_child_index - (usize::max_value() >> 1)].data = Data::Cluster(cluster_id);
+                }
 
                 //delete the unneeded edge and node
                 self.edges[second_cluster.child].deleted = true;
@@ -649,7 +663,7 @@ impl TopTreeBuilder {
             },
 
             DE => { //means D or E
-                //change the data on the first_cluster_child
+                //change the data on the second_cluster_child
                 let cluster_child_index = self.edges[second_cluster.child].index;
                 if cluster_child_index < usize::max_value() >> 1 {
                     //child is a node so we have a D merge

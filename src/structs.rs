@@ -33,7 +33,7 @@ pub struct Cluster {
 pub enum MergeType {
     AB,
 
-    C,
+    CE,
 
     DE,
 }
@@ -42,16 +42,16 @@ impl MergeType {
     pub fn from_usize(integer: usize) -> Self {
         match integer {
             0 => MergeType::AB,
-            1 => MergeType::C,
+            1 => MergeType::CE,
             _ => MergeType::DE,
         }
     }
 
     pub fn get_usize(&self) -> usize {
-        use MergeType::{AB,C,DE};
+        use MergeType::{AB,CE,DE};
         match self {
             AB => 0,
-            C => 1,
+            CE => 1,
             DE => 2,
         }
     }
