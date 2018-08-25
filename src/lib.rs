@@ -363,6 +363,7 @@ impl TopTreeBuilder {
     }
 
     fn vertical_merge(&mut self) {
+        use MergeRule::{SimplifiedStandardRules, FastAdvancedRules};
         let mut index = 0;
         while index < self.nodes.len() {
             //check if node is not deleted
@@ -370,7 +371,16 @@ impl TopTreeBuilder {
                 if self.nodes[index].first_child + 1 < self.nodes[index].last_child || index == 0 {//node has more than one child or is the dummy node
                     let mut child_index = self.nodes[index].first_child;
                     while child_index < self.nodes[index].last_child {
-                        self.ssr_vertical_merge(NodeHandle { parent: index, child: child_index});
+                        match self.flags.merge_rule {
+                            SimplifiedStandardRules => {
+                                self.ssr_vertical_merge(NodeHandle { parent: index, child: child_index});
+                            },
+
+                            FastAdvancedRules => {
+                                self.far_vertical_merge(NodeHandle { parent: index, child: child_index});
+                            }
+                        }
+
                         child_index += 1;
                     }
                 }
@@ -404,6 +414,58 @@ impl TopTreeBuilder {
         }
     }
 
+    ///fast_advanced_rules
+    fn far_vertical_merge(&mut self, mut first_cluster: NodeHandle) {
+        loop {
+            let second_parent = self.edges[first_cluster.child].index;
+            if second_parent >= usize::max_value() >> 1 { return } //child is a leaf
+            if self.nodes[second_parent].first_child + 1 != self.nodes[second_parent].last_child { return } //child has more than one child
+            let second_child = self.nodes[second_parent].first_child;
+            let second_cluster = NodeHandle { parent: second_parent, child: second_child};
+
+            if self.try_merge(first_cluster.clone(), second_cluster.clone(), MergeType::AB) {
+                self.merge(first_cluster.clone(), second_cluster.clone(), MergeType::AB);
+
+                if self.edges[first_cluster.child].index >= usize::max_value() >> 1 { return } //child is a leaf
+                first_cluster.parent = self.edges[first_cluster.child].index;
+                if self.nodes[first_cluster.parent].first_child + 1 != self.nodes[first_cluster.parent].last_child {return} //child has more than one child
+                first_cluster.child = self.nodes[first_cluster.parent].first_child;
+                continue
+            }
+
+            //build third cluster
+            let third_parent = self.edges[second_child].index;
+            if third_parent >= usize::max_value() >> 1 {
+                self.merge(first_cluster.clone(), second_cluster.clone(), MergeType::AB);
+                return
+            } //child is a leaf
+            if self.nodes[third_parent].first_child + 1 != self.nodes[third_parent].last_child {
+                self.merge(first_cluster.clone(), second_cluster.clone(), MergeType::AB);
+                return
+            } //child has more than one child
+            let third_child = self.nodes[third_parent].first_child;
+            let third_cluster = NodeHandle { parent: third_parent, child: third_child};
+
+            if self.try_merge(second_cluster.clone(), third_cluster.clone(), MergeType::AB) {
+                self.merge(second_cluster.clone(), third_cluster, MergeType::AB);
+
+                if self.edges[second_cluster.child].index >= usize::max_value() >> 1 { return } //child is a leaf
+                first_cluster.parent = self.edges[second_cluster.child].index;
+                if self.nodes[first_cluster.parent].first_child + 1 != self.nodes[first_cluster.parent].last_child {return} //child has more than one child
+                first_cluster.child = self.nodes[first_cluster.parent].first_child;
+                continue
+            } else {
+                self.merge(first_cluster.clone(), second_cluster.clone(), MergeType::AB);
+
+                if self.edges[first_cluster.child].index >= usize::max_value() >> 1 { return } //child is a leaf
+                first_cluster.parent = self.edges[first_cluster.child].index;
+                if self.nodes[first_cluster.parent].first_child + 1 != self.nodes[first_cluster.parent].last_child {return} //child has more than one child
+                first_cluster.child = self.nodes[first_cluster.parent].first_child;
+                continue
+            }
+        }
+    }
+
     ///returns true if the cluster exists already
     fn try_merge(&self, first_cluster: NodeHandle, second_cluster: NodeHandle, merge_type: MergeType) -> bool {
         //get the id of the new cluster
@@ -419,6 +481,7 @@ impl TopTreeBuilder {
     }
 
     fn merge(&mut self, first_cluster: NodeHandle, second_cluster: NodeHandle, merge_type: MergeType) {
+        assert!(first_cluster.parent != second_cluster.parent || merge_type != MergeType::AB);
         use MergeType::{AB,C,DE};
         //get the id of the new cluster
         let first_node = self.edges[first_cluster.child].index;
@@ -435,7 +498,6 @@ impl TopTreeBuilder {
                 return;
             }
         }
-
         let cluster_id = self.add_cluster(cluster);
 
         match merge_type {
