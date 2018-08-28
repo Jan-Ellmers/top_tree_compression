@@ -39,7 +39,7 @@ pub enum MergeType {
 }
 
 impl MergeType {
-    pub fn from_usize(integer: usize) -> Self {
+    pub fn from_i32(integer: i32) -> Self {
         match integer {
             0 => MergeType::AB,
             1 => MergeType::CE,
@@ -47,7 +47,7 @@ impl MergeType {
         }
     }
 
-    pub fn get_usize(&self) -> usize {
+    pub fn get_i32(&self) -> i32 {
         use MergeType::{AB,CE,DE};
         match self {
             AB => 0,

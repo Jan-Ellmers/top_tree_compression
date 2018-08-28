@@ -1,4 +1,6 @@
 #![feature(extern_prelude)]
+#![feature(libc)]
+#![allow(unused_macros)]
 extern crate quick_xml;
 
 #[macro_use]
@@ -7,12 +9,36 @@ mod structs;
 pub mod io_tree;
 pub mod flags_and_statistic;
 mod uninitialized;
+mod sdsl_interface;
 
 use structs::{Node, Leaf, Edge, Cluster, Child, NodeHandle, MergeType, Data};
 use io_tree::{IO_Tree, GenResult};
 use flags_and_statistic::{Statistic, Flags, MergeRule};
 use uninitialized::Uninitialized;
+use sdsl_interface::{
+    load_structure_from_file,
+    load_pointer_from_file,
+    load_merge_type_from_file,
+    load_label_from_file,
 
+    save_structure_to_file,
+    save_pointer_to_file,
+    save_merge_type_to_file,
+    save_label_to_file,
+
+    set_structure_vector,
+    get_structure_vector,
+
+    set_pointer_vector,
+    get_pointer_vector,
+
+    set_merge_type_vector,
+    get_merge_type_vector,
+
+    //set_label_vector_from_str,
+    set_label_vector_from_string,
+    get_label_vector,
+};
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Formatter, Result, Write};
@@ -71,7 +97,7 @@ impl TopTreeBuilder {
     }
 
     #[allow(non_snake_case)]
-    pub fn new_from_IO_tree (tree: IO_Tree, flags: Option<Flags>) -> TopTreeBuilder {
+    pub fn new_from_IO_tree(tree: IO_Tree, flags: Option<Flags>) -> TopTreeBuilder {
         let mut builder = TopTreeBuilder {
             nodes: Vec::with_capacity(40_000_000),
             leafs: Vec::with_capacity(40_000_000),
@@ -94,6 +120,55 @@ impl TopTreeBuilder {
         builder.build_from_IO_tree(tree);
 
         builder
+    }
+
+    pub fn new_fom_file(path: &str) -> GenResult<TopTreeBuilder> {
+        run_command!("tar", "-x", path);
+
+        let mut structure_path = path.to_owned();
+        structure_path.push_str("/structure.sdsl");
+
+        let mut pointer_path = path.to_owned();
+        pointer_path.push_str("/pointer.sdsl");
+
+        let mut merge_type_path = path.to_owned();
+        merge_type_path.push_str("/merge_type.sdsl");
+
+        let mut label_path = path.to_owned();
+        label_path.push_str("/label.sdsl");
+
+        load_structure_from_file(&structure_path);
+        load_pointer_from_file(&pointer_path);
+        load_merge_type_from_file(&merge_type_path);
+        load_label_from_file(&label_path);
+
+        let mut top_tree_builder = TopTreeBuilder {
+            nodes: Vec::new(),
+            leafs: Vec::new(),
+            edges: Vec::new(),
+
+            clusters: HashMap::new(),
+            labels: HashMap::new(),
+
+            cluster_vector: Vec::new(),
+            cluster_size: Vec::new(),
+            label_vector:  Vec::new(),
+
+            flags: Flags::default(),
+
+            statistic: Statistic::new(),
+
+            number_of_steps: 0,
+        };
+
+        let structure = get_structure_vector();
+        let pointer = get_pointer_vector();
+        let merge_type = get_merge_type_vector();
+        let label = get_label_vector();
+
+        top_tree_builder.detraverse(structure, pointer, merge_type, label);
+
+        Ok(top_tree_builder)
     }
 
     #[allow(non_snake_case)]
@@ -158,6 +233,41 @@ impl TopTreeBuilder {
         self.edges.clear();
     }
 
+    pub fn get_statistic(&self) -> &Statistic {
+        &self.statistic
+    }
+
+    pub fn save_to_file(&self, path: &str) {
+        let (structure, pointer, merge_type, label) = self.traverse();
+
+        set_structure_vector(structure);
+        set_pointer_vector(pointer);
+        set_merge_type_vector(merge_type);
+        set_label_vector_from_string(label);
+
+        run_command!("mkdir", "path");
+
+        let mut structure_path = path.to_owned();
+        structure_path.push_str("/structure.sdsl");
+
+        let mut pointer_path = path.to_owned();
+        pointer_path.push_str("/pointer.sdsl");
+
+        let mut merge_type_path = path.to_owned();
+        merge_type_path.push_str("/merge_type.sdsl");
+
+        let mut label_path = path.to_owned();
+        label_path.push_str("/label.sdsl");
+
+        if !save_structure_to_file(&structure_path) {panic!("Error: Could not save structure_vector")}
+        if !save_pointer_to_file(&pointer_path) {panic!("Error: Could not save pointer_vector")}
+        if !save_merge_type_to_file(&merge_type_path) {panic!("Error: Could not save merge_type_vector")}
+        if !save_label_to_file(&label_path) {panic!("Error: Could not save label_vector")}
+
+        run_command!("tar", path);
+        run_command!("rm", "-r", path);
+    }
+
     #[allow(non_snake_case)]
     pub fn get_IO_tree(&mut self) -> IO_Tree {
         let mut dummy_node = IO_Tree {
@@ -174,10 +284,6 @@ impl TopTreeBuilder {
 
         assert!(dummy_node.children.len() == 1);
         dummy_node.children.pop_back().unwrap()
-    }
-
-    pub fn get_statistic(&self) -> &Statistic {
-        &self.statistic
     }
 
     #[allow(non_snake_case)]
@@ -858,7 +964,7 @@ impl TopTreeBuilder {
         self.nodes[parent].last_child = backward_index;
     }
 
-    pub fn traverse(&self) -> (Vec<bool>, Vec<usize>, Vec<usize>, Vec<String>) { //TODO remove the pub
+    fn traverse(&self) -> (Vec<bool>, Vec<usize>, Vec<i32>, Vec<String>) {
         let mut structure = Vec::new();
         let mut merge_types = Vec::new();
         let lable = self.label_vector.clone();
@@ -882,7 +988,7 @@ impl TopTreeBuilder {
                 work_stack.push((current_index, false, own_traverse_index));
 
                 //push the merge type
-                merge_types.push(merge_type.get_usize());
+                merge_types.push(merge_type.get_i32());
 
                 //first child
                 if *first_child < self.label_vector.len() {
@@ -926,7 +1032,7 @@ impl TopTreeBuilder {
         (structure, pointer, merge_types, lable)
     }
 
-    pub fn detraverse(&mut self, structure: Vec<bool>, pointer: Vec<usize>, merge_types: Vec<usize>, labels: Vec<String>) { //TODO remove the pub
+    fn detraverse(&mut self, structure: Vec<bool>, pointer: Vec<usize>, merge_types: Vec<i32>, labels: Vec<String>) {
         //build label Hash Map
         for (index, label) in labels.iter().enumerate() {
             self.labels.insert(label.clone(), index);
@@ -942,7 +1048,7 @@ impl TopTreeBuilder {
         //the traversal index is not the index in the cluster vector so this maps the traversal index to the cluster index
         let mut traversal_index_to_cluster_index = HashMap::new();
 
-        //build rank Hash Map //TODO maybe replace this by sdsl
+        //build rank Hash Map
         let mut rank = HashMap::new();
         let mut number_of_zeros: usize = 0;
         for (index, bit) in structure.iter().enumerate() {
@@ -961,7 +1067,7 @@ impl TopTreeBuilder {
         while let Some((index, mut merge_type, mut first_child)) = workstack.pop() {
             if merge_type.is_uninitialized() {
                 //first encounter of this cluster prototype
-                merge_type.set_value(MergeType::from_usize(merge_types[index]));
+                merge_type.set_value(MergeType::from_i32(merge_types[index]));
                 if structure[index*2] {
                     //push self on stack
                     workstack.push((index, merge_type, first_child));

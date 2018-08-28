@@ -19,3 +19,38 @@ macro_rules! debug {
         }
     });
 }
+
+macro_rules! run_command {
+    ($dir:expr; $command:expr, $( $args:expr),*) => ({
+        {
+            use std::process::Command;
+            Command::new($command)
+                .current_dir($dir)
+                .args(&[$( $args ),*])
+                .output()
+                .expect(&format!("failed to execute process: {}", $command))
+        }
+    });
+
+    ($command:expr, $( $args:expr),*) => ({
+        {
+            use std::process::Command;
+            Command::new($command)
+                .args(&[$( $args ),*])
+                .output()
+                .expect(&format!("failed to execute process: {}", $command))
+        }
+    });
+}
+
+macro_rules! compile_cpp {
+    ($( $args:expr),*) => ({
+        let output = run_command!("g++", $( $args ),*);
+
+        //print the error if we have one
+        let error = String::from_utf8(output.stderr).unwrap();
+        if error != "".to_owned() {
+            panic!("C++ compile error: \n{}", error);
+        }
+    });
+}
