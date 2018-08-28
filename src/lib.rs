@@ -123,7 +123,21 @@ impl TopTreeBuilder {
     }
 
     pub fn new_fom_file(path: &str) -> GenResult<TopTreeBuilder> {
-        run_command!("tar", "-x", path);
+        let mut path_list = path.split('/').collect::<Vec<&str>>();
+        let name = path_list.pop().unwrap();
+        let mut directory = String::new();
+        for elem in path_list {
+            directory.push_str(elem);
+            directory.push('/');
+        }
+
+        if path.ends_with(".tar") {
+            run_command!(&directory; "tar", "-xf", name);
+            run_command!("rm", path);
+        } else {
+            run_command!(&directory; "tar", "-xf", &format!("{}.tar", name));
+            run_command!("rm", &format!("{}.tar", path));
+        }
 
         let mut structure_path = path.to_owned();
         structure_path.push_str("/structure.sdsl");
@@ -168,11 +182,14 @@ impl TopTreeBuilder {
 
         top_tree_builder.detraverse(structure, pointer, merge_type, label);
 
+        run_command!(&directory; "tar", "cf", &format!("{}.tar", name), name);
+        run_command!("rm", "-r", path);
+
         Ok(top_tree_builder)
     }
 
     #[allow(non_snake_case)]
-    pub fn build_from_IO_tree(&mut self, tree: IO_Tree) {
+    fn build_from_IO_tree(&mut self, tree: IO_Tree) {
         //insert the dummy label
         let dummy_label_id = self.insert_label(&DUMMY_NODE_LABEL.to_owned());
         self.nodes.push(Node::new(dummy_label_id));
@@ -245,7 +262,7 @@ impl TopTreeBuilder {
         set_merge_type_vector(merge_type);
         set_label_vector_from_string(label);
 
-        run_command!("mkdir", "path");
+        run_command!("mkdir", "-p", path);
 
         let mut structure_path = path.to_owned();
         structure_path.push_str("/structure.sdsl");
@@ -264,7 +281,14 @@ impl TopTreeBuilder {
         if !save_merge_type_to_file(&merge_type_path) {panic!("Error: Could not save merge_type_vector")}
         if !save_label_to_file(&label_path) {panic!("Error: Could not save label_vector")}
 
-        run_command!("tar", path);
+        let mut path_list = path.split('/').collect::<Vec<&str>>();
+        let name = path_list.pop().unwrap();
+        let mut directory = String::new();
+        for elem in path_list {
+            directory.push_str(elem);
+            directory.push('/');
+        }
+        run_command!(&directory; "tar", "cf", &format!("{}.tar", name), name);
         run_command!("rm", "-r", path);
     }
 

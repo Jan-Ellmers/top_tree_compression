@@ -3,6 +3,9 @@
 mod src;
 
 fn main () {
+    let mut current_dir = String::from_utf8(run_command!("pwd").stdout).unwrap();
+    current_dir.pop();
+
     install_sdsl();
     //clear static lib
     run_command!("target"; "rm", "libinterface.a");
@@ -13,7 +16,7 @@ fn main () {
     //build a static library
     run_command!("target"; "ar", "crus", "libsdsl_interface.a", "sdsl_interface.o");
 
-    println!("cargo:rustc-flags= -L target/sdsl/sdsl_install/lib -l sdsl -l divsufsort -l divsufsort64 -l stdc++");
+    println!("cargo:rustc-flags= -L {}/target/sdsl/sdsl_install/lib -l sdsl -l divsufsort -l divsufsort64 -l stdc++", current_dir);
     println!("cargo:rustc-link-search=native=target");
 }
 

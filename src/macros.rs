@@ -21,25 +21,44 @@ macro_rules! debug {
 }
 
 macro_rules! run_command {
-    ($dir:expr; $command:expr, $( $args:expr),*) => ({
+    ($dir:expr; $command:expr, $( $args:expr),+) => ({
         {
             use std::process::Command;
             Command::new($command)
                 .current_dir($dir)
-                .args(&[$( $args ),*])
+                .args(&[$( $args ),+])
                 .output()
                 .expect(&format!("failed to execute process: {}", $command))
         }
     });
 
-    ($command:expr, $( $args:expr),*) => ({
+    ($command:expr, $( $args:expr),+) => ({
         {
             use std::process::Command;
             Command::new($command)
-                .args(&[$( $args ),*])
+                .args(&[$( $args ),+])
                 .output()
                 .expect(&format!("failed to execute process: {}", $command))
         }
+    });
+
+    ($command:expr) => ({
+    {
+        use std::process::Command;
+        Command::new($command)
+            .output()
+            .expect(&format!("failed to execute process: {}", $command))
+    }
+    });
+
+    ($dir:expr; $command:expr) => ({
+    {
+        use std::process::Command;
+        Command::new($command)
+            .current_dir($dir)
+            .output()
+            .expect(&format!("failed to execute process: {}", $command))
+    }
     });
 }
 
