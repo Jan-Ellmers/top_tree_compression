@@ -50,63 +50,63 @@ bool save_label_to_file_c(const char* path) {
 
 //-----------------------------------------------------------------------------------\\
 
-void set_structure_vector_c(int length, const bool* new_structure) {
+void set_structure_vector_c(size_t length, const bool* new_structure) {
     bit_vector b(length, 0);
-    for (unsigned int volatile i = 0; i < length; i++) {
+    for (size_t i = 0; i < length; i++) {
         b[i] = new_structure[i];
     }
     structure = rrr_vector<>(b);
 }
 
-int get_structure_vector_length_c() {
+size_t get_structure_vector_length_c() {
     return structure.size();
 }
 
 void get_structure_vector_c(bool* new_structure) {
-    int length = get_structure_vector_length_c();
-    for (unsigned int volatile i = 0; i < length; i++) {
+    size_t length = get_structure_vector_length_c();
+    for (size_t i = 0; i < length; i++) {
         new_structure[i] = structure[i];
     }
 }
 
 //-----------------------------------------------------------------------------------\\
 
-void set_pointer_vector_c(int length, const size_t* new_pointer) {
+void set_pointer_vector_c(size_t length, const size_t* new_pointer) {
     int_vector<> v(length, 0);
-    for (unsigned int volatile i = 0; i < length; i++) {
+    for (size_t i = 0; i < length; i++) {
         v[i] = new_pointer[i];
     }
     pointer = vlc_vector<>(v);
 }
 
-int get_pointer_vector_length_c() {
+size_t get_pointer_vector_length_c() {
     return pointer.size();
 }
 
 void get_pointer_vector_c(size_t* new_pointer) {
-    int length = get_pointer_vector_length_c();
-    for (unsigned int volatile i = 0; i < length; i++) {
+    size_t length = get_pointer_vector_length_c();
+    for (size_t i = 0; i < length; i++) {
         new_pointer[i] = pointer[i];
     }
 }
 
 //-----------------------------------------------------------------------------------\\
 
-void set_merge_type_vector_c(int length, const int* new_merge_type) {
+void set_merge_type_vector_c(size_t length, const int* new_merge_type) {
     int_vector<> v(length, 0);
-    for (unsigned int volatile i = 0; i < length; i++) {
+    for (size_t i = 0; i < length; i++) {
         v[i] = new_merge_type[i];
     }
     merge_type = vlc_vector<>(v);
 }
 
-int get_merge_type_vector_length_c() {
+size_t get_merge_type_vector_length_c() {
     return merge_type.size();
 }
 
 void get_merge_type_vector_c(int* new_merge_type) {
-    int length = get_merge_type_vector_length_c();
-    for (unsigned int volatile i = 0; i < length; i++) {
+    size_t length = get_merge_type_vector_length_c();
+    for (size_t i = 0; i < length; i++) {
         new_merge_type[i] = merge_type[i];
     }
 }
@@ -117,7 +117,7 @@ void set_label_vector_c(const char* new_label) {
     construct_im(label, new_label, 1);
 }
 
-int get_label_vector_length_c() {
+size_t get_label_vector_length_c() {
     return label.size();
 }
 

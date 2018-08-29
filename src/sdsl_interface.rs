@@ -29,25 +29,25 @@ extern "C" {
 
 //-----------------------------------------------------------------------------------\\
 
-    fn set_structure_vector_c(length: c_int, new_structure: *const bool);
+    fn set_structure_vector_c(length: size_t, new_structure: *const bool);
 
-    fn get_structure_vector_length_c() -> c_int;
+    fn get_structure_vector_length_c() -> size_t;
 
     fn get_structure_vector_c(new_structure: *mut bool);
 
 //-----------------------------------------------------------------------------------\\
 
-    fn set_pointer_vector_c(length: c_int, new_pointer: *const size_t);
+    fn set_pointer_vector_c(length: size_t, new_pointer: *const size_t);
 
-    fn get_pointer_vector_length_c() -> c_int;
+    fn get_pointer_vector_length_c() -> size_t;
 
     fn get_pointer_vector_c(new_pointer: *mut size_t);
 
 //-----------------------------------------------------------------------------------\\
 
-    fn set_merge_type_vector_c(length: c_int, new_merge_type: *const c_int);
+    fn set_merge_type_vector_c(length: size_t, new_merge_type: *const c_int);
 
-    fn get_merge_type_vector_length_c() -> c_int;
+    fn get_merge_type_vector_length_c() -> size_t;
 
     fn get_merge_type_vector_c(new_merge_type: *mut c_int);
 
@@ -55,7 +55,7 @@ extern "C" {
 
     fn set_label_vector_c(new_label: *const wchar_t);
 
-    fn get_label_vector_length_c() -> c_int;
+    fn get_label_vector_length_c() -> size_t;
 
     fn get_label_vector_c(new_label: *mut wchar_t);
 
@@ -158,7 +158,7 @@ pub fn save_label_to_file(path: &str) -> bool {
 pub fn set_structure_vector(new_structure: Vec<bool>) {
     STRUCTURE_INITIALSIED.with(|elem| *elem.borrow_mut() = true);
     unsafe {
-        set_structure_vector_c(new_structure.len() as i32, new_structure.as_ptr());
+        set_structure_vector_c(new_structure.len(), new_structure.as_ptr());
     }
 }
 
@@ -182,7 +182,7 @@ pub fn get_structure_vector() -> Vec<bool> {
 pub fn set_pointer_vector(new_pointer: Vec<usize>) {
     POINTER_INITIALSIED.with(|elem| *elem.borrow_mut() = true);
     unsafe {
-        set_pointer_vector_c(new_pointer.len() as i32, new_pointer.as_ptr() as *const usize);
+        set_pointer_vector_c(new_pointer.len(), new_pointer.as_ptr() as *const usize);
     }
 }
 
@@ -206,7 +206,7 @@ pub fn get_pointer_vector() -> Vec<usize> {
 pub fn set_merge_type_vector(new_merge_type: Vec<i32>) {
     MERGE_TYPE_INITIALSIED.with(|elem| *elem.borrow_mut() = true);
     unsafe {
-        set_merge_type_vector_c(new_merge_type.len() as i32, new_merge_type.as_ptr());
+        set_merge_type_vector_c(new_merge_type.len(), new_merge_type.as_ptr());
     }
 }
 
